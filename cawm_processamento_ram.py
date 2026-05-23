@@ -55,10 +55,13 @@ METODOS = ("estado_inicial", "spinup")
 
 @dataclass
 class ResultadoMetodo:
+    cenario: str
     periodo_id: int
     bacia: str
     station: str
     method: str
+    area_km2_usada: float
+    fonte_area: str
     fase: str
     nse_calib: float
     nse_val: float
@@ -249,6 +252,69 @@ def _comparar_metrica(valor_novo: float, valor_ref: float | None) -> float | Non
     return float(valor_novo - valor_ref)
 
 
+def _resolver_area_parametros(
+    parametros_base: dict[str, Any],
+    referencia_periodo: ModelResult | None,
+    usar_area_resultado: bool,
+) -> tuple[dict[str, Any], float, str]:
+    parametros = dict(parametros_base)
+
+    area_bacia = parametros.get("area_km2")
+    area_bacia = float(area_bacia) if area_bacia is not None else None
+
+    area_resultado = None
+    if referencia_periodo is not None and getattr(referencia_periodo, "area_km2") is not None:
+        area_resultado = float(getattr(referencia_periodo, "area_km2"))
+
+    if usar_area_resultado and area_resultado is not None:
+        parametros["area_km2"] = area_resultado
+        return parametros, area_resultado, "resultado"
+
+    if area_bacia is None:
+        raise ValueError("área da bacia ausente")
+
+    parametros["area_km2"] = area_bacia
+    return parametros, area_bacia, "bacia"
+
+
+def _imprimir_inicio_periodo(cenario: str, bacia: str, station: str, method: str, periodo_id: int, area_usada: float, fonte_area: str):
+    print("\n" + "-" * 110)
+    print(
+        f"▶️ [{cenario}] Iniciando período {periodo_id}: {bacia} / {station} / {method} "
+        f"| área usada={area_usada:.3f} km² ({fonte_area})"
+    )
+
+
+def _imprimir_resultado_periodo(cenario: str, periodo_id: int, bacia: str, station: str, method: str, resultados_periodo: list[ResultadoMetodo]):
+    if not resultados_periodo:
+        print(f"⚠️ [{cenario}] {bacia} / {station} / {method} (período {periodo_id}): sem resultados válidos")
+        return
+
+    df = pd.DataFrame([r.__dict__ for r in resultados_periodo])
+    colunas = [
+        "fase",
+        "nse_calib",
+        "nse_val",
+        "nse_sqrt_calib",
+        "nse_sqrt_val",
+        "nse_log_calib",
+        "nse_log_val",
+        "pbias_calib",
+        "pbias_val",
+        "ks",
+        "kl",
+        "a",
+        "expo_perdas",
+    ]
+    print(df[colunas].to_string(index=False))
+
+    melhor = df.sort_values("nse_calib", ascending=False).iloc[0]
+    print(
+        f"✅ [{cenario}] período {periodo_id} finalizado | melhor fase={melhor['fase']} "
+        f"| NSE_cal={melhor['nse_calib']:.5f} | NSE_val={melhor['nse_val']:.5f}"
+    )
+
+
 def _calcular_indices_por_intervalo(simulado, observado, mascara_calibracao, mascara_validacao):
     resultados = {}
     if mascara_calibracao is not None and mascara_calibracao.any():
@@ -356,7 +422,7 @@ def carregar_resultados_referencia(session):
     return referencia
 
 
-def processar():
+def processar(cenario: str, usar_area_resultado: bool):
     xp, _usar_gpu = get_array_backend(prefer_gpu=True)
 
     engine, Session = initialize_db()
@@ -402,6 +468,27 @@ def processar():
                 periodo_id = int(getattr(periodo, "id"))
                 periodo_station = str(getattr(periodo, "station") or nome_bacia)
                 periodo_method = str(getattr(periodo, "method") or "normal")
+                referencia_periodo = referencia.get(periodo_id)
+
+                try:
+                    parametros_periodo, area_usada, fonte_area = _resolver_area_parametros(
+                        parametros_base=parametros,
+                        referencia_periodo=referencia_periodo,
+                        usar_area_resultado=usar_area_resultado,
+                    )
+                except ValueError as exc:
+                    print(f"⚠️ [{cenario}] {nome_bacia} / {periodo_station} / {periodo_method}: {exc}")
+                    continue
+
+                _imprimir_inicio_periodo(
+                    cenario=cenario,
+                    bacia=nome_bacia,
+                    station=periodo_station,
+                    method=periodo_method,
+                    periodo_id=periodo_id,
+                    area_usada=area_usada,
+                    fonte_area=fonte_area,
+                )
 
                 calib_start, calib_end, val_start, val_end, ajustou_periodo = _corrigir_periodo_para_serie(periodo, dados_base["datas"])
                 if ajustou_periodo:
@@ -416,13 +503,15 @@ def processar():
                 dados_periodo["val_start"] = val_start
                 dados_periodo["val_end"] = val_end
 
+                resultados_periodo: list[ResultadoMetodo] = []
+
                 for metodo in METODOS:
                     for usar_parametros_a_expo in (False, True):
                         fase = "ks_kl" if not usar_parametros_a_expo else "ks_kl_a_expo"
                         try:
                             saida = calibrar_periodo(
                                 nome_bacia=nome_bacia,
-                                parametros=parametros,
+                                parametros=parametros_periodo,
                                 dados=dados_periodo,
                                 xp=xp,
                                 metodo=metodo,
@@ -436,36 +525,45 @@ def processar():
                         indices = saida["indices"]
                         ref = _resultado_referencia(periodo_id, referencia)
 
-                        resultados_finais.append(
-                            ResultadoMetodo(
-                                periodo_id=periodo_id,
-                                bacia=nome_bacia,
-                                station=periodo_station,
-                                method=periodo_method,
-                                fase=fase + f"__{metodo}",
-                                nse_calib=float(indices["calib"]["Nash"]),
-                                nse_val=float(indices["val"]["Nash"]),
-                                nse_sqrt_calib=float(indices["calib"]["Nash_sqrt"]),
-                                nse_sqrt_val=float(indices["val"]["Nash_sqrt"]),
-                                nse_log_calib=float(indices["calib"]["Nash_log"]),
-                                nse_log_val=float(indices["val"]["Nash_log"]),
-                                pbias_calib=float(indices["calib"]["Pbias"]),
-                                pbias_val=float(indices["val"]["Pbias"]),
-                                nash_calib=float(indices["calib"]["Nash"]),
-                                nash_val=float(indices["val"]["Nash"]),
-                                ks=float(resultado.get("ks", np.nan)),
-                                kl=float(resultado.get("kl", np.nan)),
-                                a=float(resultado.get("a", np.nan)) if resultado.get("a") is not None else None,
-                                expo_perdas=float(resultado.get("expo_perdas", np.nan)) if resultado.get("expo_perdas") is not None else None,
-                                referencia_nse_calib=ref["nse_calib"],
-                                referencia_nse_val=ref["nse_val"],
-                                delta_nse_calib=_comparar_metrica(float(indices["calib"]["Nash"]), ref["nse_calib"]),
-                                delta_nse_val=_comparar_metrica(float(indices["val"]["Nash"]), ref["nse_val"]),
-                            )
+                        item = ResultadoMetodo(
+                            cenario=cenario,
+                            periodo_id=periodo_id,
+                            bacia=nome_bacia,
+                            station=periodo_station,
+                            method=periodo_method,
+                            area_km2_usada=area_usada,
+                            fonte_area=fonte_area,
+                            fase=fase + f"__{metodo}",
+                            nse_calib=float(indices["calib"]["Nash"]),
+                            nse_val=float(indices["val"]["Nash"]),
+                            nse_sqrt_calib=float(indices["calib"]["Nash_sqrt"]),
+                            nse_sqrt_val=float(indices["val"]["Nash_sqrt"]),
+                            nse_log_calib=float(indices["calib"]["Nash_log"]),
+                            nse_log_val=float(indices["val"]["Nash_log"]),
+                            pbias_calib=float(indices["calib"]["Pbias"]),
+                            pbias_val=float(indices["val"]["Pbias"]),
+                            nash_calib=float(indices["calib"]["Nash"]),
+                            nash_val=float(indices["val"]["Nash"]),
+                            ks=float(resultado.get("ks", np.nan)),
+                            kl=float(resultado.get("kl", np.nan)),
+                            a=float(resultado.get("a", np.nan)) if resultado.get("a") is not None else None,
+                            expo_perdas=float(resultado.get("expo_perdas", np.nan)) if resultado.get("expo_perdas") is not None else None,
+                            referencia_nse_calib=ref["nse_calib"],
+                            referencia_nse_val=ref["nse_val"],
+                            delta_nse_calib=_comparar_metrica(float(indices["calib"]["Nash"]), ref["nse_calib"]),
+                            delta_nse_val=_comparar_metrica(float(indices["val"]["Nash"]), ref["nse_val"]),
                         )
+                        resultados_finais.append(item)
+                        resultados_periodo.append(item)
 
-                # finaliza apenas um período por vez no relatório do teste
-                print(f"✅ {nome_bacia} / {periodo.station} / {periodo.method}: processado em RAM")
+                _imprimir_resultado_periodo(
+                    cenario=cenario,
+                    periodo_id=periodo_id,
+                    bacia=nome_bacia,
+                    station=periodo_station,
+                    method=periodo_method,
+                    resultados_periodo=resultados_periodo,
+                )
 
         return resultados_finais
     finally:
@@ -473,9 +571,9 @@ def processar():
         engine.dispose()
 
 
-def imprimir_relatorio(resultados_finais: list[ResultadoMetodo]):
+def imprimir_relatorio(resultados_finais: list[ResultadoMetodo], titulo: str):
     print("\n" + "=" * 90)
-    print("RELATÓRIO DE PROCESSAMENTO EM RAM")
+    print(titulo)
     print("=" * 90)
 
     if not resultados_finais:
@@ -487,6 +585,8 @@ def imprimir_relatorio(resultados_finais: list[ResultadoMetodo]):
         "bacia",
         "station",
         "method",
+        "area_km2_usada",
+        "fonte_area",
         "fase",
         "nash_calib",
         "nash_val",
@@ -520,6 +620,81 @@ def imprimir_relatorio(resultados_finais: list[ResultadoMetodo]):
         )
 
 
+def comparar_cenarios_individualmente(resultados_bacia: list[ResultadoMetodo], resultados_resultado: list[ResultadoMetodo]):
+    print("\n" + "=" * 90)
+    print("COMPARAÇÃO INDIVIDUAL: ÁREA DA BACIA x ÁREA DE MODEL_RESULT")
+    print("=" * 90)
+
+    if not resultados_bacia or not resultados_resultado:
+        print("Sem dados suficientes para comparar os dois cenários.")
+        return
+
+    df_bacia = pd.DataFrame([r.__dict__ for r in resultados_bacia]).rename(
+        columns={
+            "nse_calib": "nse_calib_bacia",
+            "nse_val": "nse_val_bacia",
+            "nse_sqrt_calib": "nse_sqrt_calib_bacia",
+            "nse_sqrt_val": "nse_sqrt_val_bacia",
+            "nse_log_calib": "nse_log_calib_bacia",
+            "nse_log_val": "nse_log_val_bacia",
+            "pbias_calib": "pbias_calib_bacia",
+            "pbias_val": "pbias_val_bacia",
+            "area_km2_usada": "area_km2_bacia",
+        }
+    )
+    df_res = pd.DataFrame([r.__dict__ for r in resultados_resultado]).rename(
+        columns={
+            "nse_calib": "nse_calib_resultado",
+            "nse_val": "nse_val_resultado",
+            "nse_sqrt_calib": "nse_sqrt_calib_resultado",
+            "nse_sqrt_val": "nse_sqrt_val_resultado",
+            "nse_log_calib": "nse_log_calib_resultado",
+            "nse_log_val": "nse_log_val_resultado",
+            "pbias_calib": "pbias_calib_resultado",
+            "pbias_val": "pbias_val_resultado",
+            "area_km2_usada": "area_km2_resultado",
+        }
+    )
+
+    chaves = ["periodo_id", "bacia", "station", "method", "fase"]
+    comparado = df_bacia.merge(df_res, on=chaves, how="inner")
+
+    if comparado.empty:
+        print("Não houve interseção de resultados entre os dois cenários.")
+        return
+
+    comparado["delta_nse_calib"] = comparado["nse_calib_resultado"] - comparado["nse_calib_bacia"]
+    comparado["delta_nse_val"] = comparado["nse_val_resultado"] - comparado["nse_val_bacia"]
+    comparado["delta_nse_sqrt_calib"] = comparado["nse_sqrt_calib_resultado"] - comparado["nse_sqrt_calib_bacia"]
+    comparado["delta_nse_log_calib"] = comparado["nse_log_calib_resultado"] - comparado["nse_log_calib_bacia"]
+    comparado["delta_pbias_calib"] = comparado["pbias_calib_resultado"] - comparado["pbias_calib_bacia"]
+
+    colunas = [
+        "periodo_id",
+        "bacia",
+        "station",
+        "method",
+        "fase",
+        "area_km2_bacia",
+        "area_km2_resultado",
+        "nse_calib_bacia",
+        "nse_calib_resultado",
+        "delta_nse_calib",
+        "nse_val_bacia",
+        "nse_val_resultado",
+        "delta_nse_val",
+        "delta_nse_sqrt_calib",
+        "delta_nse_log_calib",
+        "delta_pbias_calib",
+    ]
+    print(comparado[colunas].sort_values(["periodo_id", "fase"]).to_string(index=False))
+
+
 if __name__ == "__main__":
-    resultados = processar()
-    imprimir_relatorio(resultados)
+    resultados_bacia = processar(cenario="area_da_bacia", usar_area_resultado=False)
+    imprimir_relatorio(resultados_bacia, "RELATÓRIO DE PROCESSAMENTO EM RAM - CENÁRIO: ÁREA DA BACIA")
+
+    resultados_model_result = processar(cenario="area_do_resultado", usar_area_resultado=True)
+    imprimir_relatorio(resultados_model_result, "RELATÓRIO DE PROCESSAMENTO EM RAM - CENÁRIO: ÁREA DO MODEL_RESULT")
+
+    comparar_cenarios_individualmente(resultados_bacia, resultados_model_result)
