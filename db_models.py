@@ -3,7 +3,7 @@ Modelos SQLAlchemy para o CAWM.
 
 Define a estrutura das tabelas usando ORM do SQLAlchemy.
 """
-from sqlalchemy import Column, Integer, String, Float, DateTime
+from sqlalchemy import Column, Integer, String, Float, DateTime, Date, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 
@@ -71,3 +71,27 @@ class Bacia(Base):
             "b": self.b,
             "T": self.T,
         }
+
+
+class CalibrationPeriod(Base):
+    """Períodos de calibração/validação vinculados a uma bacia."""
+
+    __tablename__ = "calibration_periods"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bacia_id = Column(Integer, ForeignKey("bacias.id"), nullable=False, index=True)
+    station = Column(String(255), nullable=True)
+    method = Column(String(32), nullable=True)
+
+    calib_start = Column(Date, nullable=True)
+    calib_end = Column(Date, nullable=True)
+    val_start = Column(Date, nullable=True)
+    val_end = Column(Date, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return (
+            f"<CalibrationPeriod(id={self.id}, bacia_id={self.bacia_id}, station='{self.station}',"
+            f" method='{self.method}')>"
+        )
