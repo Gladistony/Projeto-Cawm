@@ -31,6 +31,19 @@ class TestDbInit(unittest.TestCase):
                 session.close()
                 engine.dispose()
 
+    def test_db_existente_conecta_sem_erro(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = "cawm.db"
+
+            engine1, _ = initialize_db(str(db_path))
+            engine1.dispose()
+
+            engine2, _ = initialize_db(str(db_path))
+            with engine2.connect() as connection:
+                result = connection.exec_driver_sql("SELECT 1").scalar_one()
+                self.assertEqual(result, 1)
+            engine2.dispose()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
