@@ -3,6 +3,9 @@
 # Core dependencies (obrigatório)
 numpy>=1.21.0
 SQLAlchemy>=1.4
+geopandas>=0.10.0
+maplotlib>=3.4.0
+pandas>=1.3.0
 
 # Optional dependencies (recomendado para máximo de funcionalidade)
 scipy>=1.7.0
