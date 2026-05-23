@@ -2,6 +2,7 @@
 
 # Core dependencies (obrigatório)
 numpy>=1.21.0
+SQLAlchemy>=1.4
 
 # Optional dependencies (recomendado para máximo de funcionalidade)
 scipy>=1.7.0
