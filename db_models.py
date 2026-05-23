@@ -95,3 +95,37 @@ class CalibrationPeriod(Base):
             f"<CalibrationPeriod(id={self.id}, bacia_id={self.bacia_id}, station='{self.station}',"
             f" method='{self.method}')>"
         )
+
+
+class ModelResult(Base):
+    """Resultados de desempenho do modelo para um período de calibração/validação."""
+
+    __tablename__ = "model_results"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    calibration_period_id = Column(Integer, ForeignKey("calibration_periods.id"), nullable=False, index=True, unique=True)
+    
+    # Parâmetros do modelo
+    area_km2 = Column(Float, nullable=True)
+    s_mm = Column(Float, nullable=True)
+    ks = Column(Float, nullable=True)
+    
+    # Métricas de desempenho - Calibração
+    nse_calib = Column(Float, nullable=True)
+    nse_sqrt_calib = Column(Float, nullable=True)
+    nse_log_calib = Column(Float, nullable=True)
+    pbias_calib = Column(Float, nullable=True)
+    
+    # Métricas de desempenho - Validação
+    nse_val = Column(Float, nullable=True)
+    nse_sqrt_val = Column(Float, nullable=True)
+    nse_log_val = Column(Float, nullable=True)
+    pbias_val = Column(Float, nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return (
+            f"<ModelResult(id={self.id}, calib_period_id={self.calibration_period_id}, "
+            f"nse_calib={self.nse_calib}, nse_val={self.nse_val})>"
+        )
