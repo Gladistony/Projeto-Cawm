@@ -2,3 +2,6 @@ __pycache__/
 **/__pycache__/
 *.py[cod]
 *$py.class
+
+# Arquivos de banco de dados (produção e teste isolados)
+cawm_test.db

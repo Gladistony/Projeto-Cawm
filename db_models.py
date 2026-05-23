@@ -1,0 +1,73 @@
+"""
+Modelos SQLAlchemy para o CAWM.
+
+Define a estrutura das tabelas usando ORM do SQLAlchemy.
+"""
+from sqlalchemy import Column, Integer, String, Float, DateTime
+from sqlalchemy.ext.declarative import declarative_base
+from datetime import datetime
+
+Base = declarative_base()
+
+
+class Bacia(Base):
+    """Modelo para representar uma bacia hidrográfica."""
+
+    __tablename__ = "bacias"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    nome = Column(String(255), unique=True, nullable=False, index=True)
+    regiao = Column(String(255), nullable=True)
+    area_km2 = Column(Float, nullable=True)
+
+    # Parâmetros hidrológicos
+    k = Column(Float, nullable=True)
+    a = Column(Float, nullable=True)
+    expo_perdas = Column(Float, nullable=True)
+    beta = Column(Float, nullable=True)
+    kg = Column(Float, nullable=True)
+    rio = Column(Integer, nullable=True)
+    submax = Column(Float, nullable=True)
+    gmax = Column(Float, nullable=True)
+
+    # Condições iniciais (estado inicial dos reservatórios)
+    reserva_solo_inicial = Column(Float, nullable=True)
+    profundo_inicial = Column(Float, nullable=True)
+    s3_inicial = Column(Float, nullable=True)
+    s1_inicial = Column(Float, default=0.0)
+    s2_inicial = Column(Float, default=0.0)
+
+    # Constantes fixas
+    b = Column(Float, default=1.666666667)
+    T = Column(Float, default=86400.0)
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<Bacia(id={self.id}, nome='{self.nome}', area_km2={self.area_km2})>"
+
+    def to_dict(self):
+        """Converte a bacia em dicionário para uso em funcoes.py."""
+        return {
+            "id": self.id,
+            "nome": self.nome,
+            "regiao": self.regiao,
+            "area_km2": self.area_km2,
+            "k": self.k,
+            "a": self.a,
+            "expo_perdas": self.expo_perdas,
+            "beta": self.beta,
+            "kg": self.kg,
+            "rio": self.rio,
+            "submax": self.submax,
+            "gmax": self.gmax,
+            "reserva_solo_inicial": self.reserva_solo_inicial,
+            "profundo_inicial": self.profundo_inicial,
+            "s3_inicial": self.s3_inicial,
+            "s1_inicial": self.s1_inicial,
+            "s2_inicial": self.s2_inicial,
+            "b": self.b,
+            "T": self.T,
+        }

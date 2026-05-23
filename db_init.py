@@ -16,6 +16,11 @@ import os
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
+# Configuração do ambiente: isola teste de produção
+# Use CAWM_ENV=test para banco de testes
+ENVIRONMENT = os.getenv("CAWM_ENV", "production")
+DEFAULT_DB = "cawm_test.db" if ENVIRONMENT == "test" else "cawm.db"
+
 
 def get_sqlite_url(db_path: str) -> str:
     # Usa caminho absoluto para evitar surpresas
@@ -23,11 +28,14 @@ def get_sqlite_url(db_path: str) -> str:
     return f"sqlite:///{db_path}"
 
 
-def get_engine(db_path: str = "cawm.db", **engine_kwargs):
+def get_engine(db_path: str | None = None, **engine_kwargs):
     """Cria e retorna um SQLAlchemy Engine apontando para `db_path`.
 
+    Se db_path não for fornecido, usa o banco padrão baseado no ambiente.
     engine_kwargs são passados para `create_engine`.
     """
+    if db_path is None:
+        db_path = DEFAULT_DB
     url = get_sqlite_url(db_path)
     # echo=False por padrão; caller pode sobrescrever
     engine = create_engine(url, echo=engine_kwargs.pop("echo", False), **engine_kwargs)
@@ -39,14 +47,17 @@ def get_sessionmaker(engine, **session_kwargs):
     return sessionmaker(bind=engine, **session_kwargs)
 
 
-def initialize_db(db_path: str = "cawm.db") -> tuple:
+def initialize_db(db_path: str | None = None) -> tuple:
     """Inicializa conexão com o banco SQLite e testa a operação mínima.
 
     Retorna (engine, Session) para uso posterior.
+    Se db_path não for fornecido, usa o banco padrão baseado no ambiente.
     Cria o arquivo do banco se não existir (SQLite faz isso automaticamente
     ao conectar via SQLAlchemy). Também executa um comando simples para
-    verificar a conectividade.
+    verificar a conectividade e cria todas as tabelas baseadas nos modelos ORM.
     """
+    from db_models import Base
+    
     engine = get_engine(db_path)
     Session = get_sessionmaker(engine)
 
@@ -57,6 +68,9 @@ def initialize_db(db_path: str = "cawm.db") -> tuple:
     except Exception as exc:
         # Re-raise com mensagem clara
         raise RuntimeError(f"Falha ao conectar ao banco SQLite '{db_path}': {exc}") from exc
+
+    # Criar todas as tabelas baseadas nos modelos ORM
+    Base.metadata.create_all(engine)
 
     return engine, Session
 

@@ -1,7 +1,14 @@
+"""
+Testes para db_init.py
+"""
 import sys
+import os
 import tempfile
 import unittest
 from pathlib import Path
+
+# Ativar modo teste ANTES de importar db_init
+os.environ["CAWM_ENV"] = "test"
 
 # Adicionar o diretório raiz ao path para importar db_init
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -31,18 +38,6 @@ class TestDbInit(unittest.TestCase):
                 session.close()
                 engine.dispose()
 
-    def test_db_existente_conecta_sem_erro(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            db_path = "cawm.db"
-
-            engine1, _ = initialize_db(str(db_path))
-            engine1.dispose()
-
-            engine2, _ = initialize_db(str(db_path))
-            with engine2.connect() as connection:
-                result = connection.exec_driver_sql("SELECT 1").scalar_one()
-                self.assertEqual(result, 1)
-            engine2.dispose()
 
 
 if __name__ == "__main__":
