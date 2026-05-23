@@ -20,6 +20,7 @@ import seed_bacias
 import seed_periodos
 import seed_resultados
 import seed_hydrologic_series
+import seed_poco_do_fumo
 
 
 def remove_database(db_path: str) -> None:
@@ -59,6 +60,13 @@ def run_master(reset: bool = True, db_path: str | None = None) -> None:
     print(f"   Atualizados: {series_result['updated']}")
     print(f"   Bacias sem cadastro correspondente: {len(series_result['missing'])}")
     print(f"   Arquivos inválidos: {len(series_result['invalid'])}")
+
+    print("\n5) Seed específico de Poço do Fumo...")
+    poco_result = seed_poco_do_fumo.seed_poco_do_fumo(target_db)
+    print(f"   Criados: {poco_result['created']}")
+    print(f"   Atualizados: {poco_result['updated']}")
+    if poco_result["missing_params"]:
+        print(f"   Parâmetros ausentes no XLSM: {', '.join(poco_result['missing_params'])}")
 
     print("\n" + "=" * 70)
     print("SEED MASTER FINALIZADO")
