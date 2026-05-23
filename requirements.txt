@@ -1,0 +1,12 @@
+# Dependências do CAWM Standalone
+
+# Core dependencies (obrigatório)
+numpy>=1.21.0
+
+# Optional dependencies (recomendado para máximo de funcionalidade)
+scipy>=1.7.0
+scikit-optimize>=0.9.0
+
+# Para GPU acceleration (opcional - requer NVIDIA GPU + CUDA)
+# Descomente a linha abaixo se tiver GPU disponível
+# cupy-cuda11x>=12.0.0  # Substitua 11x pela sua versão de CUDA (ex: cupy-cuda11 para CUDA 11.x)

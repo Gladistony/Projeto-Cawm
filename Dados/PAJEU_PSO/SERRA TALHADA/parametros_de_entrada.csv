@@ -1,0 +1,16 @@
+,Valores
+Area_subbacia=,5825.47874982785
+Ks = ,0
+b = ,1.666666667
+KL = ,0.24111103971431166
+SUBmax = ,65
+Reserv_solo (Vol. Inicial) = ,0
+t = ,86400
+n = ,0.03
+mult = ,10
+Coeficiente_do_expoente_das_perdas_na_calha = ,1.17765450765508
+Rios,0
+Profundo_corrigido_inicial = ,0
+Reserva_na_calha_do_rio_inicial = ,0
+Parametro_de_infiltacao_beta =,0
+Gmax = ,0
