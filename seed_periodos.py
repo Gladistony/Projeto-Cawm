@@ -38,9 +38,15 @@ def parse_period(period_str: str):
 
     # take first two
     def to_date(s):
+        hoje_ano = datetime.now().year
         for fmt in ("%d/%m/%Y", "%d/%m/%y"):
             try:
-                return datetime.strptime(s, fmt).date()
+                data = datetime.strptime(s, fmt).date()
+                # Corrige ambiguidade de século para datas com ano de 2 dígitos
+                # Ex.: 67 -> 2067 (comportamento padrão do strptime) deve virar 1967.
+                if fmt == "%d/%m/%y" and data.year > (hoje_ano + 1):
+                    data = data.replace(year=data.year - 100)
+                return data
             except Exception:
                 continue
         return None
