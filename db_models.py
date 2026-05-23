@@ -3,9 +3,8 @@ Modelos SQLAlchemy para o CAWM.
 
 Define a estrutura das tabelas usando ORM do SQLAlchemy.
 """
-from sqlalchemy import Column, Integer, String, Float, DateTime, Date, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, Date, ForeignKey, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
-from datetime import datetime
 
 Base = declarative_base()
 
@@ -40,10 +39,6 @@ class Bacia(Base):
     # Constantes fixas
     b = Column(Float, default=1.666666667)
     T = Column(Float, default=86400.0)
-
-    # Metadata
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     def __repr__(self):
         return f"<Bacia(id={self.id}, nome='{self.nome}', area_km2={self.area_km2})>"
@@ -88,8 +83,6 @@ class CalibrationPeriod(Base):
     val_start = Column(Date, nullable=True)
     val_end = Column(Date, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
     def __repr__(self):
         return (
             f"<CalibrationPeriod(id={self.id}, bacia_id={self.bacia_id}, station='{self.station}',"
@@ -122,10 +115,62 @@ class ModelResult(Base):
     nse_log_val = Column(Float, nullable=True)
     pbias_val = Column(Float, nullable=True)
     
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
     def __repr__(self):
         return (
             f"<ModelResult(id={self.id}, calib_period_id={self.calibration_period_id}, "
             f"nse_calib={self.nse_calib}, nse_val={self.nse_val})>"
         )
+
+
+class EvaporationMonthly(Base):
+    """Evaporação mensal por bacia.
+
+    Mantém exatamente 12 registros por bacia, um para cada mês.
+    """
+
+    __tablename__ = "evaporation_monthly"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bacia_id = Column(Integer, ForeignKey("bacias.id"), nullable=False, index=True)
+    mes = Column(Integer, nullable=False)
+    valor = Column(Float, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("bacia_id", "mes", name="uq_evaporation_monthly_bacia_mes"),
+    )
+
+    def __repr__(self):
+        return f"<EvaporationMonthly(id={self.id}, bacia_id={self.bacia_id}, mes={self.mes}, valor={self.valor})>"
+
+
+class PrecipitationDaily(Base):
+    """Precipitação diária por bacia."""
+
+    __tablename__ = "precipitation_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bacia_id = Column(Integer, ForeignKey("bacias.id"), nullable=False, index=True)
+    data = Column(Date, nullable=False)
+    valor = Column(Float, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("bacia_id", "data", name="uq_precipitation_daily_bacia_data"),
+    )
+
+    def __repr__(self):
+        return f"<PrecipitationDaily(id={self.id}, bacia_id={self.bacia_id}, data={self.data}, valor={self.valor})>"
+
+
+class FlowDaily(Base):
+    """Vazão observada diária (PAO) por bacia."""
+
+    __tablename__ = "flow_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bacia_id = Column(Integer, ForeignKey("bacias.id"), nullable=False, index=True)
+    data = Column(Date, nullable=False)
+    valor = Column(Float, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("bacia_id", "data", name="uq_flow_daily_bacia_data"),
+    )
+
+    def __repr__(self):
+        return f"<FlowDaily(id={self.id}, bacia_id={self.bacia_id}, data={self.data}, valor={self.valor})>"

@@ -149,10 +149,10 @@ def find_bacia_fuzzy(name: str, session, threshold: float = 0.6):
     return None
 
 
-def import_periods(csv_path: Path):
+def import_periods(csv_path: Path, db_path: str | None = None):
     df = pd.read_csv(csv_path, sep=';', header=None, dtype=str, keep_default_na=False)
 
-    engine, Session = initialize_db()
+    engine, Session = initialize_db(db_path)
     session = Session()
 
     created = 0
@@ -210,6 +210,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Importa períodos de calibração/validação')
     parser.add_argument('csv', help='Arquivo CSV (separador ";")')
+    parser.add_argument('--db', default=None, help='Caminho opcional para o banco SQLite')
     args = parser.parse_args()
 
     path = Path(args.csv)
@@ -217,7 +218,7 @@ if __name__ == '__main__':
         print('Arquivo não encontrado:', path)
         raise SystemExit(1)
 
-    result = import_periods(path)
+    result = import_periods(path, args.db)
     print('Criados:', result['created'])
     if result['missing']:
         print('\nBacias não encontradas (nome limpo, raw, regiao):')

@@ -68,7 +68,7 @@ def construir_dicionario_bacias(pasta_raiz="Dados"):
     return dicionario_bacias
 
 
-def popular_bacias():
+def popular_bacias(db_path: str | None = None):
     """
     Extrai os parâmetros das bacias e popula a tabela no banco de dados.
     """
@@ -98,7 +98,7 @@ def popular_bacias():
     
     # 3. Inicializar banco de dados
     print("\n3️⃣ Inicializando banco de dados...")
-    engine, SessionLocal = initialize_db()
+    engine, SessionLocal = initialize_db(db_path)
     session = SessionLocal()
     
     try:
@@ -153,4 +153,10 @@ def popular_bacias():
 
 
 if __name__ == "__main__":
-    popular_bacias()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Popula a tabela de bacias")
+    parser.add_argument("--db", default=None, help="Caminho opcional para o banco SQLite")
+    args = parser.parse_args()
+
+    popular_bacias(args.db)

@@ -95,11 +95,11 @@ def find_period(station_name_from_csv: str, session):
     return None
 
 
-def import_results(csv_path: Path):
+def import_results(csv_path: Path, db_path: str | None = None):
     """Importa resultados de desempenho do CSV para o banco."""
     df = pd.read_csv(csv_path)
     
-    engine, Session = initialize_db()
+    engine, Session = initialize_db(db_path)
     session = Session()
     
     created = 0
@@ -163,6 +163,7 @@ if __name__ == '__main__':
     
     parser = argparse.ArgumentParser(description='Importa resultados de desempenho do modelo')
     parser.add_argument('csv', help='Arquivo CSV com resultados')
+    parser.add_argument('--db', default=None, help='Caminho opcional para o banco SQLite')
     args = parser.parse_args()
     
     path = Path(args.csv)
@@ -170,7 +171,7 @@ if __name__ == '__main__':
         print('Arquivo não encontrado:', path)
         raise SystemExit(1)
     
-    result = import_results(path)
+    result = import_results(path, args.db)
     print('Criados:', result['created'])
     if result['missing']:
         print(f'\n{len(result["missing"])} período(s) não encontrado(s):')
