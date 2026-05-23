@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from db_init import initialize_db, get_engine
 from db_models import Base, Bacia
+from seed_bacias import construir_dicionario_bacias
 import tempfile
 
 
@@ -129,6 +130,25 @@ class TestSeedBacias(unittest.TestCase):
 
         finally:
             session.close()
+
+    def test_construir_dicionario_ignora_reduzidas(self):
+        """Testa se o scanner do seed ignora pastas reduzidas."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            raiz = Path(temp_dir)
+
+            regiao = raiz / "PAJEU_PSO"
+            normal = regiao / "SERRA TALHADA"
+            reduzida = regiao / "SERRA TALHADA REDUZIDO"
+
+            for pasta in (normal, reduzida):
+                (pasta / "shapes").mkdir(parents=True)
+                (pasta / "shapes" / "base.shp").touch()
+
+            resultado = construir_dicionario_bacias(str(raiz))
+
+            self.assertIn("SERRA TALHADA", resultado)
+            self.assertNotIn("SERRA TALHADA REDUZIDO", resultado)
+            self.assertEqual(resultado["SERRA TALHADA"]["regiao"], "PAJEU_PSO")
 
 
 if __name__ == "__main__":

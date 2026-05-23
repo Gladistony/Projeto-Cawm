@@ -15,6 +15,12 @@ from db_init import initialize_db
 from db_models import Base, Bacia
 from funcoes import extrair_parametros_shapes
 
+SUFIXO_REDUZIDO = " REDUZIDO"
+
+
+def _eh_bacia_reduzida(nome_bacia: str) -> bool:
+    return nome_bacia.upper().endswith(SUFIXO_REDUZIDO)
+
 
 def construir_dicionario_bacias(pasta_raiz="Dados"):
     """
@@ -40,6 +46,9 @@ def construir_dicionario_bacias(pasta_raiz="Dados"):
         # Iterar sobre bacias dentro de cada região
         for bacia_dir in regiao_dir.iterdir():
             if not bacia_dir.is_dir():
+                continue
+
+            if _eh_bacia_reduzida(bacia_dir.name):
                 continue
             
             bacia = bacia_dir.name
@@ -99,6 +108,9 @@ def popular_bacias():
         bacias_atualizadas = 0
         
         for nome_bacia, parametros in bacias_com_params.items():
+            parametros = dict(parametros)
+            parametros["regiao"] = dicionario_bacias[nome_bacia]["regiao"]
+
             # Verificar se bacia já existe
             bacia_existente = session.query(Bacia).filter_by(nome=nome_bacia).first()
             
