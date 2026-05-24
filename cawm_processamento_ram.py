@@ -694,7 +694,3 @@ if __name__ == "__main__":
     resultados_bacia = processar(cenario="area_da_bacia", usar_area_resultado=False)
     imprimir_relatorio(resultados_bacia, "RELATÓRIO DE PROCESSAMENTO EM RAM - CENÁRIO: ÁREA DA BACIA")
 
-    resultados_model_result = processar(cenario="area_do_resultado", usar_area_resultado=True)
-    imprimir_relatorio(resultados_model_result, "RELATÓRIO DE PROCESSAMENTO EM RAM - CENÁRIO: ÁREA DO MODEL_RESULT")
-
-    comparar_cenarios_individualmente(resultados_bacia, resultados_model_result)
