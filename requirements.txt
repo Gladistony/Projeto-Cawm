@@ -14,3 +14,5 @@ scikit-optimize>=0.9.0
 # Para GPU acceleration (opcional - requer NVIDIA GPU + CUDA)
 # Descomente a linha abaixo se tiver GPU disponível
 # cupy-cuda11x>=12.0.0  # Substitua 11x pela sua versão de CUDA (ex: cupy-cuda11 para CUDA 11.x)
+cupy-cuda12x[ctk]
+

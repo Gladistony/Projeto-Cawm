@@ -342,6 +342,7 @@ def calibrar_parametros_pso(
     limites,
     n_particulas=2000,
     max_iter=10,
+    paciencia=10,
     coeficientes=(0.8, 1.0, 2.0),
     dias_spinup=WARMUP_PADRAO_DIAS,
     mascara_calibracao=None,
@@ -396,6 +397,8 @@ def calibrar_parametros_pso(
         }
     ]
 
+    sem_melhoria = 0
+
     for iteracao in range(max_iter):
         r1 = xp.random.random(size=posicao.shape).astype(xp.float32)
         r2 = xp.random.random(size=posicao.shape).astype(xp.float32)
@@ -430,9 +433,16 @@ def calibrar_parametros_pso(
         melhor_posicao = xp.where(melhorou[:, None], posicao, melhor_posicao)
 
         melhor_indice = int(_converter_escalar(xp.argmin(melhor_objetivo)))
+        houve_melhora_global = False
         if melhor_objetivo[melhor_indice] < melhor_obj_global:
             melhor_obj_global = melhor_objetivo[melhor_indice].copy()
             melhor_pos_global = melhor_posicao[melhor_indice].copy()
+            houve_melhora_global = True
+
+        if houve_melhora_global:
+            sem_melhoria = 0
+        else:
+            sem_melhoria += 1
 
         print(
             f"    Iteração {iteracao + 1:02d}/{max_iter} - {metodo}: "
@@ -447,6 +457,13 @@ def calibrar_parametros_pso(
                 **{nome: float(_converter_escalar(melhor_pos_global[idx])) for idx, nome in enumerate(nomes_parametros)},
             }
         )
+
+        if paciencia is not None and paciencia > 0 and sem_melhoria >= paciencia:
+            print(
+                f"    ⏹️ Parada por paciência ({paciencia}) em {metodo}: "
+                f"sem melhora nas últimas {sem_melhoria} iterações"
+            )
+            break
 
     parametros_melhores = {
         nome: float(_converter_escalar(melhor_pos_global[idx])) for idx, nome in enumerate(nomes_parametros)
@@ -491,6 +508,7 @@ def calibrar_ks_kl_pso(
     metodo,
     n_particulas=2000,
     max_iter=10,
+    paciencia=10,
     coeficientes=(0.8, 1.0, 2.0),
     limites=None,
     dias_spinup=WARMUP_PADRAO_DIAS,
@@ -515,6 +533,7 @@ def calibrar_ks_kl_pso(
         limites=limites,
         n_particulas=n_particulas,
         max_iter=max_iter,
+        paciencia=paciencia,
         coeficientes=coeficientes,
         dias_spinup=dias_spinup,
         mascara_calibracao=mascara_calibracao,
@@ -530,6 +549,7 @@ def comparar_metodos_calibracao(
     xp,
     n_particulas=2000,
     max_iter=10,
+    paciencia=10,
     coeficientes=(0.8, 1.0, 2.0),
     limites=None,
     dias_spinup=WARMUP_PADRAO_DIAS,
@@ -557,6 +577,7 @@ def comparar_metodos_calibracao(
             metodo,
             n_particulas=n_particulas,
             max_iter=max_iter,
+            paciencia=paciencia,
             coeficientes=coeficientes,
             limites=limites,
             dias_spinup=dias_spinup,

@@ -48,8 +48,9 @@ LIMITES_PADRAO = {
     "expo_perdas": (0.5, 3.0),
 }
 
-N_PARTICULAS = 2000
-MAX_ITER = 3
+N_PARTICULAS = 5000
+MAX_ITER = 100
+PACIENCIA = 10
 METODOS = ("estado_inicial", "spinup")
 
 
@@ -143,6 +144,22 @@ def _corrigir_periodo_para_serie(periodo, datas_serie: np.ndarray):
 def _media_limites(nome_parametro: str) -> float:
     minimo, maximo = LIMITES_PADRAO[nome_parametro]
     return (minimo + maximo) / 2.0
+
+
+def _to_numpy_float_array(valor: Any) -> np.ndarray:
+    if hasattr(valor, "get"):
+        valor = valor.get()
+    return np.asarray(valor, dtype=float)
+
+
+def _to_float_scalar(valor: Any, padrao: float = np.nan) -> float:
+    if valor is None:
+        return float(padrao)
+    if hasattr(valor, "get"):
+        valor = valor.get()
+    if hasattr(valor, "item"):
+        valor = valor.item()
+    return float(valor)
 
 
 def _carregar_base_referencia(session):
@@ -376,6 +393,7 @@ def calibrar_periodo(
             limites=limites,
             n_particulas=N_PARTICULAS,
             max_iter=MAX_ITER,
+            paciencia=PACIENCIA,
             coeficientes=(0.8, 1.0, 2.0),
             mascara_calibracao=mascara_calibracao,
             valores_iniciais=valores_iniciais,
@@ -397,13 +415,14 @@ def calibrar_periodo(
             limites={"ks": LIMITES_PADRAO["ks"], "kl": LIMITES_PADRAO["kl"]},
             n_particulas=N_PARTICULAS,
             max_iter=MAX_ITER,
+            paciencia=PACIENCIA,
             coeficientes=(0.8, 1.0, 2.0),
             mascara_calibracao=mascara_calibracao,
             valores_iniciais=valores_iniciais,
         )
 
-    simulado = np.asarray(resultado["simulado"], dtype=float)
-    observado = np.asarray(dados["vazao_obs"], dtype=float)
+    simulado = _to_numpy_float_array(resultado["simulado"])
+    observado = _to_numpy_float_array(dados["vazao_obs"])
     indices = _calcular_indices_por_intervalo(simulado, observado, mascara_calibracao, mascara_validacao)
 
     return {
@@ -544,10 +563,10 @@ def processar(cenario: str, usar_area_resultado: bool):
                             pbias_val=float(indices["val"]["Pbias"]),
                             nash_calib=float(indices["calib"]["Nash"]),
                             nash_val=float(indices["val"]["Nash"]),
-                            ks=float(resultado.get("ks", np.nan)),
-                            kl=float(resultado.get("kl", np.nan)),
-                            a=float(resultado.get("a", np.nan)) if resultado.get("a") is not None else None,
-                            expo_perdas=float(resultado.get("expo_perdas", np.nan)) if resultado.get("expo_perdas") is not None else None,
+                            ks=_to_float_scalar(resultado.get("ks", np.nan)),
+                            kl=_to_float_scalar(resultado.get("kl", np.nan)),
+                            a=_to_float_scalar(resultado.get("a")) if resultado.get("a") is not None else None,
+                            expo_perdas=_to_float_scalar(resultado.get("expo_perdas")) if resultado.get("expo_perdas") is not None else None,
                             referencia_nse_calib=ref["nse_calib"],
                             referencia_nse_val=ref["nse_val"],
                             delta_nse_calib=_comparar_metrica(float(indices["calib"]["Nash"]), ref["nse_calib"]),
