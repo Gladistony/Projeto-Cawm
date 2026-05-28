@@ -14,7 +14,7 @@ from db_init import initialize_db
 from db_models import Bacia, PrecipitationDaily, EvaporationMonthly, FlowDaily, CalibrationPeriod
 
 # ==============================================================================
-# 1. FUNÇÃO DE EXTRAÇÃO DE DADOS (DB) COM MÁSCARA DE CALIBRAÇÃO
+# 1. FUNÇÃO DE EXTRAÇÃO DE DADOS
 # ==============================================================================
 def extrair_dados_bacia(nome_bacia: str):
     print(f"[{time.strftime('%H:%M:%S')}] Extraindo dados reais e alinhando datas para: {nome_bacia}...")
@@ -38,7 +38,7 @@ def extrair_dados_bacia(nome_bacia: str):
         
     area_km2 = bacia.area_km2
     SUBmax = bacia.submax if bacia.submax is not None else 1000.0
-    a_param = 1.0 # O modelo antigo usava a=1.0 por padrão para a evaporação complementar
+    a_param = 1.0 
     
     periodo = session.query(CalibrationPeriod).filter_by(bacia_id=bacia.id).first()
     if not periodo:
@@ -132,10 +132,6 @@ def simular_cawm_vetorizado_replica(xp, P, E, Q_obs, mask_calib, area, SUBmax, a
         C_hist[d, :] = C
         C_expo_hist[d, :] = C ** expo_array
 
-    # ---------------------------------------------------------
-    # CÁLCULO ANALÍTICO DO KL (O Segredo do Método Antigo)
-    # Garante fechamento de volume: sum(Vazão_obs) = sum(Vazão_calc)
-    # ---------------------------------------------------------
     mask_xp = xp.asarray(mask_calib)
     
     Q_obs_masked = Q_obs[mask_xp]
@@ -148,17 +144,13 @@ def simular_cawm_vetorizado_replica(xp, P, E, Q_obs, mask_calib, area, SUBmax, a
     soma_C_expo_masked = xp.sum(C_expo_hist_masked, axis=0)
     
     kl_array = (soma_C_masked - vol_obs_mm) / (soma_C_expo_masked + 1e-9)
-    kl_array = xp.maximum(kl_array, 0.0) # Kl não pode ser negativo
+    kl_array = xp.maximum(kl_array, 0.0) 
 
-    # Cálculo da Vazão final com o Kl forçado
     Q_calc_hist = xp.zeros((dias, particulas), dtype=xp.float32)
     for d in range(dias):
         perdas = xp.minimum(kl_array * C_expo_hist[d, :], C_hist[d, :])
         Q_calc_hist[d, :] = (C_hist[d, :] - perdas) * F_conversao
 
-    # ---------------------------------------------------------
-    # CÁLCULO DO NASH APENAS NO PERÍODO DE CALIBRAÇÃO
-    # ---------------------------------------------------------
     Q_calc_masked = Q_calc_hist[mask_xp, :]
     
     media_obs = xp.mean(Q_obs_masked)
@@ -173,7 +165,6 @@ def simular_cawm_vetorizado_replica(xp, P, E, Q_obs, mask_calib, area, SUBmax, a
 # 2. MÉTODO ESCALAR (LEGADO)
 # ==============================================================================
 def pso_escalar(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iteracoes, paciencia, w, c1, c2):
-    # Apenas 2 Dimensões: Ks(0 a 1) e Expo(0.5 a 3.0)
     X = np.random.rand(particulas, 2)
     X[:, 0] = X[:, 0] * 1.0
     X[:, 1] = X[:, 1] * 2.5 + 0.5
@@ -186,6 +177,8 @@ def pso_escalar(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iter
     Gbest_nash = -9999.0
     Gbest_kl = 0.0
     it_sem_melhora = 0
+    
+    historico_convergencia = [] # <--- LISTA PARA ARMAZENAR O NASH A CADA ITERAÇÃO
     
     for it in range(iteracoes):
         houve_melhora = False
@@ -217,6 +210,10 @@ def pso_escalar(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iter
             it_sem_melhora += 1
             
         print(f"      Iteração [{it+1:02d}/{iteracoes}] | Gbest NSE: {Gbest_nash:8.5f} | Ks: {Gbest[0]:.4f}, Expo: {Gbest[1]:.4f} (Kl calc: {Gbest_kl:.4f})", end="\r")
+        
+        # Salva o melhor Nash desta iteração específica
+        historico_convergencia.append(Gbest_nash)
+        
         if it_sem_melhora >= paciencia or it == iteracoes - 1:
             print()
             break
@@ -229,7 +226,7 @@ def pso_escalar(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iter
             X[i, 0] = np.clip(X[i, 0], 0.0, 1.0)
             X[i, 1] = np.clip(X[i, 1], 0.5, 3.0)
             
-    return Gbest_nash
+    return Gbest_nash, historico_convergencia
 
 # ==============================================================================
 # 3. MÉTODO VETORIZADO (MATRIZES CPU/GPU)
@@ -252,6 +249,8 @@ def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
     Gbest_kl = 0.0
     it_sem_melhora = 0
     
+    historico_convergencia = [] # <--- LISTA PARA ARMAZENAR O NASH A CADA ITERAÇÃO
+    
     for it in range(iteracoes):
         nash_array, kl_array = simular_cawm_vetorizado_replica(
             xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X[:, 0], X[:, 1]
@@ -273,6 +272,10 @@ def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
             it_sem_melhora += 1
             
         print(f"      Iteração [{it+1:02d}/{iteracoes}] | Gbest NSE: {Gbest_nash:8.5f} | Ks: {Gbest[0]:.4f}, Expo: {Gbest[1]:.4f} (Kl calc: {Gbest_kl:.4f})", end="\r")
+        
+        # Salva o melhor Nash desta iteração específica
+        historico_convergencia.append(Gbest_nash)
+        
         if it_sem_melhora >= paciencia or it == iteracoes - 1:
             print()
             break
@@ -286,7 +289,7 @@ def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
         X[:, 0] = xp.clip(X[:, 0], 0.0, 1.0)
         X[:, 1] = xp.clip(X[:, 1], 0.5, 3.0)
         
-    return Gbest_nash
+    return Gbest_nash, historico_convergencia
 
 # ==============================================================================
 # MOTOR ORQUESTRADOR
@@ -301,7 +304,7 @@ def executar_benchmark_final():
     P, E, Q_obs, mask_calib, area, SUBmax, a_param = extrair_dados_bacia(nome_bacia)
 
     print("\n" + "="*85)
-    print(f" PASSO 1: BENCHMARK DE VELOCIDADE (RÉPLICA DO MÉTODO ANTIGO)")
+    print(f" PASSO 1: BENCHMARK DE VELOCIDADE E CONVERGÊNCIA")
     print(f" Parâmetros PSO: w={w}, c1={c1}, c2={c2} | Máx Iterações: {iteracoes_max}")
     print("="*85)
 
@@ -311,7 +314,8 @@ def executar_benchmark_final():
         ("Matricial GPU", pso_vetorizado, cp if HAS_GPU else None, 2000)
     ]
     
-    resultados = []
+    resultados_resumo = []
+    dados_convergencia = [] # Tabela global de convergência
     
     for metodo_nome, funcao_run, xp_backend, num_particulas in configuracoes:
         if xp_backend is None and metodo_nome == "Matricial GPU":
@@ -324,9 +328,9 @@ def executar_benchmark_final():
             inicio = time.perf_counter()
             
             if xp_backend is None:
-                nash = funcao_run(P, E, Q_obs, mask_calib, area, SUBmax, a_param, num_particulas, iteracoes_max, paciencia, w, c1, c2)
+                nash, historico = funcao_run(P, E, Q_obs, mask_calib, area, SUBmax, a_param, num_particulas, iteracoes_max, paciencia, w, c1, c2)
             else:
-                nash = funcao_run(xp_backend, P, E, Q_obs, mask_calib, area, SUBmax, a_param, num_particulas, iteracoes_max, paciencia, w, c1, c2)
+                nash, historico = funcao_run(xp_backend, P, E, Q_obs, mask_calib, area, SUBmax, a_param, num_particulas, iteracoes_max, paciencia, w, c1, c2)
                 if xp_backend == cp:
                     cp.cuda.Stream.null.synchronize()
                     
@@ -335,7 +339,16 @@ def executar_benchmark_final():
             tempos.append(fim - inicio)
             nashes.append(nash)
             
-        resultados.append({
+            # Registra cada passo evolutivo no banco de dados de convergência
+            for it_num, valor_nash in enumerate(historico, start=1):
+                dados_convergencia.append({
+                    "Método": metodo_nome,
+                    "Rodada": rodada,
+                    "Iteração": it_num,
+                    "Gbest_NSE": valor_nash
+                })
+            
+        resultados_resumo.append({
             "Método": metodo_nome,
             "Partículas": num_particulas,
             "Tempo Médio (s)": np.mean(tempos),
@@ -343,12 +356,21 @@ def executar_benchmark_final():
             "Melhor NSE": np.max(nashes)
         })
 
-    df_resultados = pd.DataFrame(resultados)
+    # Exportando a Tabela Resumo (Desempenho Geral)
+    df_resumo = pd.DataFrame(resultados_resumo)
     print("\n" + "="*85)
     print(" RESUMO FINAL DO BENCHMARK")
     print("="*85)
-    print(df_resultados.to_string(index=False))
-    df_resultados.to_csv("benchmark_cawm_replica.csv", index=False)
+    print(df_resumo.to_string(index=False))
+    df_resumo.to_csv("benchmark_cawm_replica_resumo.csv", index=False)
+    
+    # Exportando a Tabela de Convergência (Para montar o gráfico do artigo)
+    df_convergencia = pd.DataFrame(dados_convergencia)
+    df_convergencia.to_csv("benchmark_cawm_replica_convergencia.csv", index=False)
+    
+    print("\nArquivos gerados com sucesso:")
+    print("1. benchmark_cawm_replica_resumo.csv (Resumo de tempo e Nash)")
+    print("2. benchmark_cawm_replica_convergencia.csv (Evolução detalhada para gráficos)")
 
 if __name__ == "__main__":
     executar_benchmark_final()
