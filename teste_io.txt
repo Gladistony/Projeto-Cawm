@@ -1,0 +1,18 @@
+
+======================================================================
+ BENCHMARK: GARGALO DE LEITURA (DISCO vs RAM)
+ Matriz de Dados: 3650 dias x 2000 partículas
+======================================================================
+[1/3] Gerando matriz de dados (In-Memory)...
+[2/3] Gravando dados no SSD para o teste de I/O...
+      Arquivo gerado no disco: 73.99 MB
+
+[Teste A] Iniciando processamento direto do Disco (I/O)...
+      -> Tempo total (I/O + Processamento): 1.1161 segundos
+
+[Teste B] Iniciando processamento In-Memory (Matriz Vetorizada)...
+      -> Tempo total (In-Memory): 0.001742 segundos
+
+======================================================================
+ SPEEDUP: Processamento em RAM foi 641 VEZES mais rápido!
+======================================================================
