@@ -178,7 +178,7 @@ def pso_escalar(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iter
     Gbest_kl = 0.0
     it_sem_melhora = 0
     
-    historico_convergencia = [] # <--- LISTA PARA ARMAZENAR O NASH A CADA ITERAÇÃO
+    historico_convergencia = []
     
     for it in range(iteracoes):
         houve_melhora = False
@@ -211,7 +211,6 @@ def pso_escalar(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iter
             
         print(f"      Iteração [{it+1:02d}/{iteracoes}] | Gbest NSE: {Gbest_nash:8.5f} | Ks: {Gbest[0]:.4f}, Expo: {Gbest[1]:.4f} (Kl calc: {Gbest_kl:.4f})", end="\r")
         
-        # Salva o melhor Nash desta iteração específica
         historico_convergencia.append(Gbest_nash)
         
         if it_sem_melhora >= paciencia or it == iteracoes - 1:
@@ -249,7 +248,7 @@ def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
     Gbest_kl = 0.0
     it_sem_melhora = 0
     
-    historico_convergencia = [] # <--- LISTA PARA ARMAZENAR O NASH A CADA ITERAÇÃO
+    historico_convergencia = []
     
     for it in range(iteracoes):
         nash_array, kl_array = simular_cawm_vetorizado_replica(
@@ -273,7 +272,6 @@ def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
             
         print(f"      Iteração [{it+1:02d}/{iteracoes}] | Gbest NSE: {Gbest_nash:8.5f} | Ks: {Gbest[0]:.4f}, Expo: {Gbest[1]:.4f} (Kl calc: {Gbest_kl:.4f})", end="\r")
         
-        # Salva o melhor Nash desta iteração específica
         historico_convergencia.append(Gbest_nash)
         
         if it_sem_melhora >= paciencia or it == iteracoes - 1:
@@ -299,13 +297,28 @@ def executar_benchmark_final():
     iteracoes_max = 20
     paciencia = 10
     rodadas = 10
-    w, c1, c2 = 0.7, 1.5, 1.5
+    
+    # Grid de hiperparâmetros a serem testados
+    hiperparametros = [
+        {"w": 0.4, "c1": 1.0, "c2": 2.0},
+        {"w": 0.5, "c1": 1.5, "c2": 1.5},
+        {"w": 0.6, "c1": 2.0, "c2": 1.0},
+        {"w": 0.7, "c1": 1.5, "c2": 2.0},
+        {"w": 0.8, "c1": 2.0, "c2": 2.0},
+        {"w": 0.9, "c1": 1.0, "c2": 1.0},
+        {"w": 0.9, "c1": 0.5, "c2": 2.5},
+        {"w": 0.7, "c1": 2.5, "c2": 0.5},
+        {"w": 0.5, "c1": 2.0, "c2": 2.0},
+        {"w": 0.8, "c1": 1.5, "c2": 1.5},
+        {"w": 0.6, "c1": 1.0, "c2": 1.0},
+        {"w": 0.4, "c1": 2.0, "c2": 1.5}
+    ]
     
     P, E, Q_obs, mask_calib, area, SUBmax, a_param = extrair_dados_bacia(nome_bacia)
 
     print("\n" + "="*85)
-    print(f" PASSO 1: BENCHMARK DE VELOCIDADE E CONVERGÊNCIA")
-    print(f" Parâmetros PSO: w={w}, c1={c1}, c2={c2} | Máx Iterações: {iteracoes_max}")
+    print(f" INICIANDO GRID SEARCH E BENCHMARK")
+    print(f" Testando {len(hiperparametros)} combinações | Máx Iterações: {iteracoes_max}")
     print("="*85)
 
     configuracoes = [
@@ -315,46 +328,59 @@ def executar_benchmark_final():
     ]
     
     resultados_resumo = []
-    dados_convergencia = [] # Tabela global de convergência
+    dados_convergencia = [] 
     
-    for metodo_nome, funcao_run, xp_backend, num_particulas in configuracoes:
-        if xp_backend is None and metodo_nome == "Matricial GPU":
-            continue
-            
-        print(f"\n▶ Executando: {metodo_nome} (Partículas: {num_particulas})")
-        tempos, nashes = [], []
+    for idx, params in enumerate(hiperparametros, 1):
+        w, c1, c2 = params["w"], params["c1"], params["c2"]
+        combo_nome = f"w{w}_c{c1}_c{c2}"
+        print(f"\n[{idx}/{len(hiperparametros)}] Testando Combo: w={w}, c1={c1}, c2={c2}")
+        print("-" * 60)
         
-        for rodada in range(1, rodadas + 1):
-            inicio = time.perf_counter()
+        for metodo_nome, funcao_run, xp_backend, num_particulas in configuracoes:
+            if xp_backend is None and metodo_nome == "Matricial GPU":
+                continue
+                
+            print(f"▶ {metodo_nome} (Partículas: {num_particulas})")
+            tempos, nashes = [], []
             
-            if xp_backend is None:
-                nash, historico = funcao_run(P, E, Q_obs, mask_calib, area, SUBmax, a_param, num_particulas, iteracoes_max, paciencia, w, c1, c2)
-            else:
-                nash, historico = funcao_run(xp_backend, P, E, Q_obs, mask_calib, area, SUBmax, a_param, num_particulas, iteracoes_max, paciencia, w, c1, c2)
-                if xp_backend == cp:
-                    cp.cuda.Stream.null.synchronize()
-                    
-            fim = time.perf_counter()
-            
-            tempos.append(fim - inicio)
-            nashes.append(nash)
-            
-            # Registra cada passo evolutivo no banco de dados de convergência
-            for it_num, valor_nash in enumerate(historico, start=1):
-                dados_convergencia.append({
-                    "Método": metodo_nome,
-                    "Rodada": rodada,
-                    "Iteração": it_num,
-                    "Gbest_NSE": valor_nash
-                })
-            
-        resultados_resumo.append({
-            "Método": metodo_nome,
-            "Partículas": num_particulas,
-            "Tempo Médio (s)": np.mean(tempos),
-            "NSE Médio": np.mean(nashes),
-            "Melhor NSE": np.max(nashes)
-        })
+            for rodada in range(1, rodadas + 1):
+                inicio = time.perf_counter()
+                
+                if xp_backend is None:
+                    nash, historico = funcao_run(P, E, Q_obs, mask_calib, area, SUBmax, a_param, num_particulas, iteracoes_max, paciencia, w, c1, c2)
+                else:
+                    nash, historico = funcao_run(xp_backend, P, E, Q_obs, mask_calib, area, SUBmax, a_param, num_particulas, iteracoes_max, paciencia, w, c1, c2)
+                    if xp_backend == cp:
+                        cp.cuda.Stream.null.synchronize()
+                        
+                fim = time.perf_counter()
+                
+                tempos.append(fim - inicio)
+                nashes.append(nash)
+                
+                for it_num, valor_nash in enumerate(historico, start=1):
+                    dados_convergencia.append({
+                        "Combo": combo_nome,
+                        "w": w,
+                        "c1": c1,
+                        "c2": c2,
+                        "Método": metodo_nome,
+                        "Rodada": rodada,
+                        "Iteração": it_num,
+                        "Gbest_NSE": valor_nash
+                    })
+                
+            resultados_resumo.append({
+                "Combo": combo_nome,
+                "w": w,
+                "c1": c1,
+                "c2": c2,
+                "Método": metodo_nome,
+                "Partículas": num_particulas,
+                "Tempo Médio (s)": np.mean(tempos),
+                "NSE Médio": np.mean(nashes),
+                "Melhor NSE": np.max(nashes)
+            })
 
     # Exportando a Tabela Resumo (Desempenho Geral)
     df_resumo = pd.DataFrame(resultados_resumo)
@@ -364,13 +390,13 @@ def executar_benchmark_final():
     print(df_resumo.to_string(index=False))
     df_resumo.to_csv("benchmark_cawm_replica_resumo.csv", index=False)
     
-    # Exportando a Tabela de Convergência (Para montar o gráfico do artigo)
+    # Exportando a Tabela de Convergência
     df_convergencia = pd.DataFrame(dados_convergencia)
     df_convergencia.to_csv("benchmark_cawm_replica_convergencia.csv", index=False)
     
     print("\nArquivos gerados com sucesso:")
-    print("1. benchmark_cawm_replica_resumo.csv (Resumo de tempo e Nash)")
-    print("2. benchmark_cawm_replica_convergencia.csv (Evolução detalhada para gráficos)")
+    print("1. benchmark_cawm_replica_resumo.csv")
+    print("2. benchmark_cawm_replica_convergencia.csv")
 
 if __name__ == "__main__":
     executar_benchmark_final()
