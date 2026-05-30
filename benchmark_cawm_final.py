@@ -70,7 +70,7 @@ def extrair_dados_bacia(nome_bacia: str):
     return P, E, Q_obs, mask_calib, area_km2, SUBmax, a_param
 
 # ==============================================================================
-# MOTOR DO CAWM VETORIZADO (RÉPLICA DO MÉTODO ANTIGO - Kl Analítico)
+# MOTOR DO CAWM VETORIZADO (Kl Analítico)
 # ==============================================================================
 def simular_cawm_vetorizado_replica(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, ks_array, expo_array):
     dias = len(P)
@@ -153,7 +153,85 @@ def simular_cawm_vetorizado_replica(xp, P, E, Q_obs, mask_calib, area, SUBmax, a
     return nash_array, kl_array
 
 # ==============================================================================
-# PSO COM SUPER ENXAME (Fase 1: Busca Rápida)
+# PSO: MEGA TENSOR (Fase 1: 50 Partículas x 8 Rodadas x 12 Combinações de uma vez)
+# ==============================================================================
+def pso_mega_tensor_grid(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, rodadas, hiperparametros, iteracoes, paciencia):
+    Nc = len(hiperparametros)
+    total_swarms = Nc * rodadas
+    total_particulas = total_swarms * particulas
+    
+    P_xp = xp.asarray(P)
+    E_xp = xp.asarray(E)
+    Q_obs_xp = xp.asarray(Q_obs)
+    
+    W = xp.zeros((total_swarms, 1, 1), dtype=xp.float32)
+    C1 = xp.zeros((total_swarms, 1, 1), dtype=xp.float32)
+    C2 = xp.zeros((total_swarms, 1, 1), dtype=xp.float32)
+    
+    for i, hp in enumerate(hiperparametros):
+        W[i*rodadas:(i+1)*rodadas, 0, 0] = hp['w']
+        C1[i*rodadas:(i+1)*rodadas, 0, 0] = hp['c1']
+        C2[i*rodadas:(i+1)*rodadas, 0, 0] = hp['c2']
+        
+    # Correção do .rand() para suportar NumPy e CuPy simultaneamente
+    X = xp.random.rand(total_swarms, particulas, 2).astype(xp.float32)
+    X[:, :, 0] = X[:, :, 0] * 1.0
+    X[:, :, 1] = X[:, :, 1] * 2.5 + 0.5
+    
+    V = xp.zeros((total_swarms, particulas, 2), dtype=xp.float32)
+    Pbest = xp.copy(X)
+    Pbest_nash = xp.full((total_swarms, particulas), -9999.0, dtype=xp.float32)
+    
+    Gbest = xp.zeros((total_swarms, 2), dtype=xp.float32)
+    Gbest_nash = xp.full(total_swarms, -9999.0, dtype=xp.float32)
+    it_sem_melhora = np.zeros(total_swarms, dtype=int)
+    
+    historico = np.zeros((total_swarms, iteracoes), dtype=float)
+    
+    for it in range(iteracoes):
+        X_flat = X.reshape(total_particulas, 2)
+        nash_flat, _ = simular_cawm_vetorizado_replica(
+            xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X_flat[:, 0], X_flat[:, 1]
+        )
+        nash_array = nash_flat.reshape(total_swarms, particulas)
+        
+        melhorias = nash_array > Pbest_nash
+        Pbest_nash = xp.where(melhorias, nash_array, Pbest_nash)
+        Pbest = xp.where(melhorias[:, :, None], X, Pbest)
+        
+        max_n = xp.max(Pbest_nash, axis=1)
+        idx_max = xp.argmax(Pbest_nash, axis=1)
+        
+        for s in range(total_swarms):
+            if max_n[s] > Gbest_nash[s]:
+                Gbest_nash[s] = max_n[s]
+                Gbest[s] = Pbest[s, int(idx_max[s])]
+                it_sem_melhora[s] = 0
+            else:
+                it_sem_melhora[s] += 1
+            historico[s, it] = float(Gbest_nash[s])
+            
+        print(f"      Mega Tensor [Iteração {it+1:02d}/{iteracoes}] Calculando {total_swarms} enxames simultâneos...", end="\r")
+            
+        if np.all(it_sem_melhora >= paciencia) or it == iteracoes - 1:
+            for s in range(total_swarms):
+                historico[s, it+1:] = float(Gbest_nash[s])
+            print()
+            break
+            
+        # Correção do .rand() aqui também
+        R1 = xp.random.rand(total_swarms, particulas, 2).astype(xp.float32)
+        R2 = xp.random.rand(total_swarms, particulas, 2).astype(xp.float32)
+        
+        V = (W * V) + (C1 * R1 * (Pbest - X)) + (C2 * R2 * (Gbest[:, None, :] - X))
+        X = X + V
+        X[:, :, 0] = xp.clip(X[:, :, 0], 0.0, 1.0)
+        X[:, :, 1] = xp.clip(X[:, :, 1], 0.5, 3.0)
+        
+    return xp.asnumpy(Gbest_nash) if HAS_GPU else Gbest_nash, historico
+
+# ==============================================================================
+# PSO COM SUPER ENXAME (Fase 1: Busca 2000 Partículas)
 # ==============================================================================
 def pso_vetorizado_multi_rodada(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, rodadas, iteracoes, paciencia, w, c1, c2):
     P_xp = xp.asarray(P)
@@ -161,7 +239,7 @@ def pso_vetorizado_multi_rodada(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_par
     Q_obs_xp = xp.asarray(Q_obs)
     
     total_particulas = particulas * rodadas
-    X = xp.random.rand(rodadas, particulas, 2, dtype=xp.float32)
+    X = xp.random.rand(rodadas, particulas, 2).astype(xp.float32)
     X[:, :, 0] = X[:, :, 0] * 1.0
     X[:, :, 1] = X[:, :, 1] * 2.5 + 0.5
     
@@ -172,6 +250,7 @@ def pso_vetorizado_multi_rodada(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_par
     Gbest = xp.zeros((rodadas, 2), dtype=xp.float32)
     Gbest_nash = xp.full(rodadas, -9999.0, dtype=xp.float32)
     it_sem_melhora = np.zeros(rodadas, dtype=int)
+    historico = np.zeros((rodadas, iteracoes), dtype=float)
     
     for it in range(iteracoes):
         X_flat = X.reshape(total_particulas, 2)
@@ -184,64 +263,54 @@ def pso_vetorizado_multi_rodada(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_par
         Pbest_nash = xp.where(melhorias, nash_array, Pbest_nash)
         Pbest = xp.where(melhorias[:, :, None], X, Pbest)
         
-        max_nash_por_rodada = xp.max(Pbest_nash, axis=1)
-        idx_max_por_rodada = xp.argmax(Pbest_nash, axis=1)
+        max_n = xp.max(Pbest_nash, axis=1)
+        idx_max = xp.argmax(Pbest_nash, axis=1)
         
         for r in range(rodadas):
-            if max_nash_por_rodada[r] > Gbest_nash[r]:
-                Gbest_nash[r] = max_nash_por_rodada[r]
-                Gbest[r] = Pbest[r, int(idx_max_por_rodada[r])]
+            if max_n[r] > Gbest_nash[r]:
+                Gbest_nash[r] = max_n[r]
+                Gbest[r] = Pbest[r, int(idx_max[r])]
                 it_sem_melhora[r] = 0
             else:
                 it_sem_melhora[r] += 1
+            historico[r, it] = float(Gbest_nash[r])
                 
-        nash_global_max = float(xp.max(Gbest_nash))
-        print(f"      Iteração [{it+1:02d}/{iteracoes}] | Melhor NSE (entre {rodadas} rodadas): {nash_global_max:8.5f}      ", end="\r")
-        
         if np.all(it_sem_melhora >= paciencia) or it == iteracoes - 1:
-            print()
+            for r in range(rodadas):
+                historico[r, it+1:] = float(Gbest_nash[r])
             break
             
-        R1 = xp.random.rand(rodadas, particulas, 2, dtype=xp.float32)
-        R2 = xp.random.rand(rodadas, particulas, 2, dtype=xp.float32)
+        R1 = xp.random.rand(rodadas, particulas, 2).astype(xp.float32)
+        R2 = xp.random.rand(rodadas, particulas, 2).astype(xp.float32)
         
         V = (w * V) + (c1 * R1 * (Pbest - X)) + (c2 * R2 * (Gbest[:, None, :] - X))
         X = X + V
         X[:, :, 0] = xp.clip(X[:, :, 0], 0.0, 1.0)
         X[:, :, 1] = xp.clip(X[:, :, 1], 0.5, 3.0)
         
-    return [float(n) for n in Gbest_nash]
+    return xp.asnumpy(Gbest_nash) if HAS_GPU else Gbest_nash, historico
 
 # ==============================================================================
-# PSO ESCALAR (Fase 2: Benchmarking Legado)
+# PSO ESCALAR (LEGADO) E VETORIZADO ÚNICO (Fase 2)
 # ==============================================================================
 def pso_escalar(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iteracoes, paciencia, w, c1, c2):
     X = np.random.rand(particulas, 2)
     X[:, 0] = X[:, 0] * 1.0
     X[:, 1] = X[:, 1] * 2.5 + 0.5
-    
     V = np.zeros((particulas, 2))
     Pbest = np.copy(X)
     Pbest_nash = np.full(particulas, -9999.0)
-    
     Gbest = np.zeros(2)
     Gbest_nash = -9999.0
     it_sem_melhora = 0
-    historico_convergencia = []
+    historico = []
     
     for it in range(iteracoes):
         houve_melhora = False
         nash_array = np.zeros(particulas)
-        
         for i in range(particulas):
-            ks_unico = np.array([X[i, 0]])
-            expo_unico = np.array([X[i, 1]])
-            
-            n_val, _ = simular_cawm_vetorizado_replica(
-                np, P, E, Q_obs, mask_calib, area, SUBmax, a_param, ks_unico, expo_unico
-            )
+            n_val, _ = simular_cawm_vetorizado_replica(np, P, E, Q_obs, mask_calib, area, SUBmax, a_param, np.array([X[i, 0]]), np.array([X[i, 1]]))
             nash_array[i] = n_val[0]
-            
             if nash_array[i] > Pbest_nash[i]:
                 Pbest_nash[i] = nash_array[i]
                 Pbest[i] = X[i]
@@ -249,90 +318,74 @@ def pso_escalar(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iter
                     Gbest_nash = nash_array[i]
                     Gbest = np.copy(X[i])
                     houve_melhora = True
-
         it_sem_melhora = 0 if houve_melhora else it_sem_melhora + 1
-        print(f"      Iteração [{it+1:02d}/{iteracoes}] | Gbest NSE: {Gbest_nash:8.5f}", end="\r")
-        historico_convergencia.append(Gbest_nash)
-        
+        historico.append(Gbest_nash)
+        print(f"      Fase 2: Iteração [{it+1:02d}/{iteracoes}] | NSE: {Gbest_nash:8.5f}", end="\r")
         if it_sem_melhora >= paciencia or it == iteracoes - 1:
             print()
             break
-            
         for i in range(particulas):
             r1, r2 = np.random.rand(2)
             V[i] = (w * V[i]) + (c1 * r1 * (Pbest[i] - X[i])) + (c2 * r2 * (Gbest - X[i]))
             X[i] = X[i] + V[i]
             X[i, 0] = np.clip(X[i, 0], 0.0, 1.0)
             X[i, 1] = np.clip(X[i, 1], 0.5, 3.0)
-            
-    return Gbest_nash, historico_convergencia
+    return Gbest_nash, historico
 
-# ==============================================================================
-# PSO VETORIZADO ÚNICO (Fase 2: Benchmarking CPU/GPU)
-# ==============================================================================
 def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iteracoes, paciencia, w, c1, c2):
     P_xp = xp.asarray(P)
     E_xp = xp.asarray(E)
     Q_obs_xp = xp.asarray(Q_obs)
     
-    X = xp.random.rand(particulas, 2, dtype=xp.float32)
+    # Correção do .rand() para uso nativo sem dar TypeError no NumPy
+    X = xp.random.rand(particulas, 2).astype(xp.float32)
     X[:, 0] = X[:, 0] * 1.0
     X[:, 1] = X[:, 1] * 2.5 + 0.5
     
     V = xp.zeros((particulas, 2), dtype=xp.float32)
     Pbest = xp.copy(X)
     Pbest_nash = xp.full(particulas, -9999.0, dtype=xp.float32)
-    
     Gbest = xp.zeros(2, dtype=xp.float32)
     Gbest_nash = -9999.0
     it_sem_melhora = 0
-    historico_convergencia = []
+    historico = []
     
     for it in range(iteracoes):
-        nash_array, _ = simular_cawm_vetorizado_replica(
-            xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X[:, 0], X[:, 1]
-        )
-        
+        nash_array, _ = simular_cawm_vetorizado_replica(xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X[:, 0], X[:, 1])
         melhorias = nash_array > Pbest_nash
         Pbest_nash = xp.where(melhorias, nash_array, Pbest_nash)
         Pbest = xp.where(melhorias[:, None], X, Pbest)
-        
         idx_max = xp.argmax(Pbest_nash)
         max_nash = float(Pbest_nash[idx_max])
-        
         if max_nash > Gbest_nash:
             Gbest_nash = max_nash
             Gbest = xp.copy(Pbest[idx_max])
             it_sem_melhora = 0
         else:
             it_sem_melhora += 1
-            
-        print(f"      Iteração [{it+1:02d}/{iteracoes}] | Gbest NSE: {Gbest_nash:8.5f}", end="\r")
-        historico_convergencia.append(Gbest_nash)
-        
+        historico.append(Gbest_nash)
+        print(f"      Fase 2: Iteração [{it+1:02d}/{iteracoes}] | NSE: {Gbest_nash:8.5f}      ", end="\r")
         if it_sem_melhora >= paciencia or it == iteracoes - 1:
             print()
             break
             
-        R1 = xp.random.rand(particulas, 2, dtype=xp.float32)
-        R2 = xp.random.rand(particulas, 2, dtype=xp.float32)
+        R1 = xp.random.rand(particulas, 2).astype(xp.float32)
+        R2 = xp.random.rand(particulas, 2).astype(xp.float32)
         
         V = (w * V) + (c1 * R1 * (Pbest - X)) + (c2 * R2 * (Gbest - X))
         X = X + V
         X[:, 0] = xp.clip(X[:, 0], 0.0, 1.0)
         X[:, 1] = xp.clip(X[:, 1], 0.5, 3.0)
-        
-    return Gbest_nash, historico_convergencia
+    return Gbest_nash, historico
 
 # ==============================================================================
-# MOTOR ORQUESTRADOR
+# MOTOR ORQUESTRADOR DE DADOS
 # ==============================================================================
 def executar_benchmark_final():
     nome_bacia = "Chorozinho"
     iteracoes_max = 20
     paciencia = 10
     rodadas = 8
-    particulas_gpu = 2000
     
     hiperparametros = [
         {"w": 0.4, "c1": 1.0, "c2": 2.0}, {"w": 0.5, "c1": 1.5, "c2": 1.5},
@@ -344,60 +397,108 @@ def executar_benchmark_final():
     ]
     
     P, E, Q_obs, mask_calib, area, SUBmax, a_param = extrair_dados_bacia(nome_bacia)
-    
     backend_busca = cp if HAS_GPU else np
     nome_busca = "Matricial GPU" if HAS_GPU else "Matricial CPU"
+    
+    dados_gridsearch_global = []
 
     # ==========================================================
-    # FASE 1: GRID SEARCH NA GPU
+    # FASE 1: MEGA TENSOR PARA 50 PARTÍCULAS
     # ==========================================================
     print("\n" + "="*85)
-    print(f" FASE 1: GRID SEARCH EXPRESSO VIA {nome_busca.upper()}")
-    print(f" Super Enxame: {rodadas * particulas_gpu} partículas simultâneas por teste.")
+    print(f" FASE 1: GRID SEARCH (50 PARTÍCULAS) - MODO MEGA TENSOR")
+    print(f" Computando TODAS as 12 combinações simultaneamente ({len(hiperparametros) * rodadas * 50} partículas)")
     print("="*85)
 
-    melhor_combo = None
-    maior_nash_medio = -9999.0
+    inicio_50 = time.perf_counter()
+    nashes_todos_50, historico_todos_50 = pso_mega_tensor_grid(
+        backend_busca, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 50, rodadas, hiperparametros, iteracoes_max, paciencia
+    )
+    if HAS_GPU: cp.cuda.Stream.null.synchronize()
+    fim_50 = time.perf_counter()
+    print(f" Tempo Total: {fim_50 - inicio_50:.2f}s para descobrir o combo do Legado!")
+
+    melhor_combo_50 = None
+    maior_nash_50 = -9999.0
+    
+    for idx, hp in enumerate(hiperparametros):
+        bloco_nashes = nashes_todos_50[idx*rodadas:(idx+1)*rodadas]
+        media_bloco = np.mean(bloco_nashes)
+        print(f"   w={hp['w']}, c1={hp['c1']}, c2={hp['c2']} -> NSE Médio: {media_bloco:.5f}")
+        
+        for r in range(rodadas):
+            swarm_id = idx * rodadas + r
+            for it in range(iteracoes_max):
+                dados_gridsearch_global.append({
+                    "Tamanho": 50, "Combo": f"w{hp['w']}_c{hp['c1']}_c{hp['c2']}", 
+                    "Rodada": r+1, "Iteracao": it+1, "Gbest_NSE": historico_todos_50[swarm_id, it]
+                })
+        
+        if media_bloco > maior_nash_50:
+            maior_nash_50 = media_bloco
+            melhor_combo_50 = hp
+
+    # ==========================================================
+    # FASE 1: BUSCA PARA 2000 PARTÍCULAS (Lote de 8 rodadas por vez)
+    # ==========================================================
+    print("\n" + "="*85)
+    print(f" FASE 1: GRID SEARCH (2000 PARTÍCULAS) - MODO SUPER ENXAME (8 em 8)")
+    print("="*85)
+
+    melhor_combo_2000 = None
+    maior_nash_2000 = -9999.0
     
     for idx, params in enumerate(hiperparametros, 1):
         w, c1, c2 = params["w"], params["c1"], params["c2"]
-        print(f"  [{idx:02d}/12] w={w}, c1={c1}, c2={c2} | Testando...", end="\r")
+        inicio_2k = time.perf_counter()
         
-        nashes_combo = pso_vetorizado_multi_rodada(
-            backend_busca, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 
-            particulas_gpu, rodadas, iteracoes_max, paciencia, w, c1, c2
+        nashes_combo, historico_combo = pso_vetorizado_multi_rodada(
+            backend_busca, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 2000, rodadas, iteracoes_max, paciencia, w, c1, c2
         )
+        if HAS_GPU: cp.cuda.Stream.null.synchronize()
+        fim_2k = time.perf_counter()
         
         media_combo = np.mean(nashes_combo)
-        print(f"  [{idx:02d}/12] w={w}, c1={c1}, c2={c2} | NSE Médio: {media_combo:.5f}                  ")
+        print(f"  [{idx:02d}/12] w={w}, c1={c1}, c2={c2} | NSE: {media_combo:.5f} | Tempo: {fim_2k - inicio_2k:.2f}s")
         
-        if media_combo > maior_nash_medio:
-            maior_nash_medio = media_combo
-            melhor_combo = params
+        for r in range(rodadas):
+            for it in range(iteracoes_max):
+                dados_gridsearch_global.append({
+                    "Tamanho": 2000, "Combo": f"w{w}_c{c1}_c{c2}", 
+                    "Rodada": r+1, "Iteracao": it+1, "Gbest_NSE": historico_combo[r, it]
+                })
+                
+        if media_combo > maior_nash_2000:
+            maior_nash_2000 = media_combo
+            melhor_combo_2000 = params
 
-    w_opt, c1_opt, c2_opt = melhor_combo["w"], melhor_combo["c1"], melhor_combo["c2"]
+    df_gridsearch = pd.DataFrame(dados_gridsearch_global)
+    df_gridsearch.to_csv("dados_brutos_fase1_gridsearch.csv", index=False)
 
     # ==========================================================
-    # FASE 2: BENCHMARK DAS TRÊS METODOLOGIAS
+    # FASE 2: BENCHMARK ESTRITO (COMPETIÇÃO DIRETA)
     # ==========================================================
     print("\n" + "="*85)
-    print(f" FASE 2: BENCHMARK COMPLETO (Melhor Combinação: w={w_opt}, c1={c1_opt}, c2={c2_opt})")
+    print(f" FASE 2: O BENCHMARK OFICIAL")
+    print(f" Legado usará: w={melhor_combo_50['w']}, c1={melhor_combo_50['c1']}, c2={melhor_combo_50['c2']}")
+    print(f" Matrizes usarão: w={melhor_combo_2000['w']}, c1={melhor_combo_2000['c1']}, c2={melhor_combo_2000['c2']}")
     print("="*85)
 
     configuracoes = [
-        ("Escalar (Legado)", pso_escalar, None, 50),
-        ("Matricial CPU", pso_vetorizado, np, 2000),
-        ("Matricial GPU", pso_vetorizado, cp if HAS_GPU else None, 2000)
+        ("Escalar (Legado)", pso_escalar, None, 50, melhor_combo_50),
+        ("Matricial CPU", pso_vetorizado, np, 2000, melhor_combo_2000),
+        ("Matricial GPU", pso_vetorizado, cp if HAS_GPU else None, 2000, melhor_combo_2000)
     ]
     
     resultados_resumo = []
-    dados_convergencia = [] 
+    dados_benchmark_global = [] 
     
-    for metodo_nome, funcao_run, xp_backend, num_particulas in configuracoes:
+    for metodo_nome, funcao_run, xp_backend, num_particulas, params in configuracoes:
         if xp_backend is None and metodo_nome == "Matricial GPU":
             continue
             
-        print(f"\n▶ Executando: {metodo_nome} (Partículas: {num_particulas})")
+        w_opt, c1_opt, c2_opt = params["w"], params["c1"], params["c2"]
+        print(f"\n▶ Executando: {metodo_nome}")
         tempos, nashes = [], []
         
         for rodada in range(1, rodadas + 1):
@@ -411,14 +512,15 @@ def executar_benchmark_final():
                     cp.cuda.Stream.null.synchronize()
                     
             fim = time.perf_counter()
-            tempos.append(fim - inicio)
+            tempo_gasto = fim - inicio
+            tempos.append(tempo_gasto)
             nashes.append(nash)
             
-            # Guardando cada iteração para o gráfico de convergência
             for it_num, valor_nash in enumerate(historico, start=1):
-                dados_convergencia.append({
+                dados_benchmark_global.append({
                     "Método": metodo_nome,
                     "Rodada": rodada,
+                    "Tempo_Rodada_S": tempo_gasto if it_num == 1 else None, 
                     "Iteração": it_num,
                     "Gbest_NSE": valor_nash
                 })
@@ -427,26 +529,25 @@ def executar_benchmark_final():
             "Método": metodo_nome,
             "Partículas": num_particulas,
             "Tempo/Rodada (s)": np.mean(tempos),
-            "Tempo Total (10x) (s)": np.sum(tempos),
-            "Estimativa Grid Completo (120x) (s)": np.mean(tempos) * 120, # Projeção de quanto demoraria a Fase 1 inteira
+            "Tempo Total (8x) (s)": np.sum(tempos),
             "NSE Médio": np.mean(nashes),
             "Melhor NSE": np.max(nashes)
         })
 
     # ==========================================================
-    # EXPORTAÇÃO
+    # EXPORTAÇÃO E FECHAMENTO
     # ==========================================================
     df_resumo = pd.DataFrame(resultados_resumo)
     print("\n" + "="*85)
-    print(" RESUMO FINAL DO BENCHMARK")
+    print(" RESUMO FINAL DA COMPETIÇÃO (FASE 2)")
     print("="*85)
     print(df_resumo.to_string(index=False))
-    df_resumo.to_csv("benchmark_cawm_replica_resumo.csv", index=False)
+    df_resumo.to_csv("resumo_final_fase2_benchmark.csv", index=False)
     
-    df_convergencia = pd.DataFrame(dados_convergencia)
-    df_convergencia.to_csv("benchmark_cawm_replica_convergencia.csv", index=False)
+    df_benchmark_convergencia = pd.DataFrame(dados_benchmark_global)
+    df_benchmark_convergencia.to_csv("dados_brutos_fase2_benchmark.csv", index=False)
     
-    print("\nArquivos gerados com sucesso! Verifique os arquivos CSV na sua pasta.")
+    print("\n[SUCESSO] 3 Arquivos CSV foram gerados contendo TODO o histórico de iterações, rodadas e tempos do seu artigo!")
 
 if __name__ == "__main__":
     executar_benchmark_final()
