@@ -12,6 +12,7 @@ Por enquanto não executa calibração nem simulação.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from sqlalchemy import func
@@ -141,6 +142,21 @@ def inventariar_bacias(session) -> list[InventarioBacia]:
     return inventario
 
 
+def formatar_data(data: date | None) -> str:
+    if data is None:
+        return "-"
+    return data.strftime("%d/%m/%Y")
+
+
+def obter_periodos_calibracao(session):
+    return (
+        session.query(CalibrationPeriod, Bacia)
+        .join(Bacia, CalibrationPeriod.bacia_id == Bacia.id)
+        .order_by(Bacia.nome, CalibrationPeriod.id)
+        .all()
+    )
+
+
 def imprimir_inventario(inventario: list[InventarioBacia]) -> None:
     total_bacias = len(inventario)
     total_periodos = sum(item.periodos for item in inventario)
@@ -171,6 +187,28 @@ def imprimir_inventario(inventario: list[InventarioBacia]) -> None:
     print("=" * 80)
 
 
+def imprimir_periodos_calibracao(periodos) -> None:
+    print("\n" + "=" * 80)
+    print("PERÍODOS DE CALIBRAÇÃO POR BACIA")
+    print("=" * 80)
+
+    if not periodos:
+        print("Nenhum período de calibração cadastrado.")
+        print("=" * 80)
+        return
+
+    for periodo, bacia in periodos:
+        periodo_calib = f"{formatar_data(periodo.calib_start)} a {formatar_data(periodo.calib_end)}"
+        periodo_val = f"{formatar_data(periodo.val_start)} a {formatar_data(periodo.val_end)}"
+        metodo = periodo.method or "-"
+        print(
+            f"bacia={bacia.nome} | calibration_id={periodo.id} | "
+            f"metodo={metodo} | calibracao={periodo_calib} | validacao={periodo_val}"
+        )
+
+    print("=" * 80)
+
+
 def main() -> None:
     engine, Session = initialize_db()
     session = Session()
@@ -178,6 +216,8 @@ def main() -> None:
     try:
         inventario = inventariar_bacias(session)
         imprimir_inventario(inventario)
+        periodos = obter_periodos_calibracao(session)
+        imprimir_periodos_calibracao(periodos)
     finally:
         session.close()
         engine.dispose()
