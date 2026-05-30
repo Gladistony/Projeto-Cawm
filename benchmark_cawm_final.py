@@ -42,9 +42,9 @@ def extrair_dados_por_id(calib_id: int):
     
     calib_start = pd.Timestamp(periodo.calib_start)
     calib_end = pd.Timestamp(periodo.calib_end)
-    valid_start = pd.Timestamp(periodo.valid_start)
-    valid_end = pd.Timestamp(periodo.valid_end)
-    metodo = periodo.metodo
+    valid_start = pd.Timestamp(getattr(periodo, "valid_start", None) or getattr(periodo, "val_start", None))
+    valid_end = pd.Timestamp(getattr(periodo, "valid_end", None) or getattr(periodo, "val_end", None))
+    metodo = getattr(periodo, "metodo", None) or getattr(periodo, "method", None)
 
     precip = session.query(PrecipitationDaily).filter_by(bacia_id=bacia.id).order_by(PrecipitationDaily.data).all()
     vazao = session.query(FlowDaily).filter_by(bacia_id=bacia.id).order_by(FlowDaily.data).all()
@@ -326,7 +326,8 @@ def pso_mega_tensor_grid_50(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 
             else:
                 it_sem_melhora[s] += 1
                 
-        print(f"      Grid GPU (50P): Iteração {it+1:02d}/{iteracoes}", end="\r")
+        melhor_global = float(xp.max(Gbest_nash))
+        print(f"      Grid GPU (50P): Iteração {it+1:02d}/{iteracoes} | Combinações: {Nc:02d} | Melhor NSE: {melhor_global:8.5f}", end="\r")
         if np.all(it_sem_melhora >= paciencia) or it == iteracoes - 1:
             print()
             break
@@ -340,47 +341,60 @@ def pso_mega_tensor_grid_50(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 
     return xp.asnumpy(Gbest_nash) if HAS_GPU else Gbest_nash
 
 def pso_mega_tensor_grid_2000(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, hiperparametros, iteracoes, paciencia):
-    # Executa a busca sequencialmente para não estourar a RAM
+    # Executa a busca na GPU com todas as combinações em paralelo, igual ao grid de 50P.
+    # Se a memória não aguentar, o erro vai aparecer aqui de forma explícita.
+    Nc = len(hiperparametros)
+    total_swarms = Nc
+    total_particulas = total_swarms * particulas
     P_xp, E_xp, Q_obs_xp = xp.asarray(P), xp.asarray(E), xp.asarray(Q_obs)
-    nashes_finais = []
-    
-    for hp in hiperparametros:
-        w, c1, c2 = hp['w'], hp['c1'], hp['c2']
-        X = xp.random.rand(particulas, 2).astype(xp.float32)
-        X[:, 0] = X[:, 0] * 1.0
-        X[:, 1] = X[:, 1] * 2.5 + 0.5
-        V = xp.zeros((particulas, 2), dtype=xp.float32)
-        Pbest = xp.copy(X)
-        Pbest_nash = xp.full(particulas, -9999.0, dtype=xp.float32)
-        Gbest = xp.zeros(2, dtype=xp.float32)
-        Gbest_nash = -9999.0
-        it_sem_melhora = 0
-        
-        for it in range(iteracoes):
-            nash_array = simular_cawm_vetorizado(xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X[:, 0], X[:, 1])
-            melhorias = nash_array > Pbest_nash
-            Pbest_nash = xp.where(melhorias, nash_array, Pbest_nash)
-            Pbest = xp.where(melhorias[:, None], X, Pbest)
-            idx_max = xp.argmax(Pbest_nash)
-            max_nash = float(Pbest_nash[idx_max])
-            if max_nash > Gbest_nash:
-                Gbest_nash = max_nash
-                Gbest = xp.copy(Pbest[idx_max])
-                it_sem_melhora = 0
+    W = xp.zeros((total_swarms, 1, 1), dtype=xp.float32)
+    C1 = xp.zeros((total_swarms, 1, 1), dtype=xp.float32)
+    C2 = xp.zeros((total_swarms, 1, 1), dtype=xp.float32)
+
+    for i, hp in enumerate(hiperparametros):
+        W[i, 0, 0], C1[i, 0, 0], C2[i, 0, 0] = hp['w'], hp['c1'], hp['c2']
+
+    X = xp.random.rand(total_swarms, particulas, 2).astype(xp.float32)
+    X[:, :, 0] = X[:, :, 0] * 1.0
+    X[:, :, 1] = X[:, :, 1] * 2.5 + 0.5
+    V = xp.zeros((total_swarms, particulas, 2), dtype=xp.float32)
+    Pbest = xp.copy(X)
+    Pbest_nash = xp.full((total_swarms, particulas), -9999.0, dtype=xp.float32)
+    Gbest = xp.zeros((total_swarms, 2), dtype=xp.float32)
+    Gbest_nash = xp.full(total_swarms, -9999.0, dtype=xp.float32)
+    it_sem_melhora = np.zeros(total_swarms, dtype=int)
+
+    for it in range(iteracoes):
+        X_flat = X.reshape(total_particulas, 2)
+        nash_flat = simular_cawm_vetorizado(xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X_flat[:, 0], X_flat[:, 1])
+        nash_array = nash_flat.reshape(total_swarms, particulas)
+        melhorias = nash_array > Pbest_nash
+        Pbest_nash = xp.where(melhorias, nash_array, Pbest_nash)
+        Pbest = xp.where(melhorias[:, :, None], X, Pbest)
+        max_n = xp.max(Pbest_nash, axis=1)
+        idx_max = xp.argmax(Pbest_nash, axis=1)
+
+        for s in range(total_swarms):
+            if max_n[s] > Gbest_nash[s]:
+                Gbest_nash[s] = max_n[s]
+                Gbest[s] = Pbest[s, int(idx_max[s])]
+                it_sem_melhora[s] = 0
             else:
-                it_sem_melhora += 1
-            if it_sem_melhora >= paciencia or it == iteracoes - 1:
-                break
-            R1, R2 = xp.random.rand(particulas, 2).astype(xp.float32), xp.random.rand(particulas, 2).astype(xp.float32)
-            V = (w * V) + (c1 * R1 * (Pbest - X)) + (c2 * R2 * (Gbest - X))
-            X = X + V
-            X[:, 0] = xp.clip(X[:, 0], 0.0, 1.0)
-            X[:, 1] = xp.clip(X[:, 1], 0.5, 3.0)
-            
-        print(f"      Grid GPU (2000P): Testado w={w}, c1={c1}, c2={c2} -> NSE: {Gbest_nash:.4f}", end="\r")
-        nashes_finais.append(Gbest_nash)
-    print()
-    return nashes_finais
+                it_sem_melhora[s] += 1
+
+        melhor_global = float(xp.max(Gbest_nash))
+        print(f"      Grid GPU (2000P): Iteração {it+1:02d}/{iteracoes} | Combinações: {Nc:02d} | Melhor NSE: {melhor_global:8.5f}", end="\r")
+        if np.all(it_sem_melhora >= paciencia) or it == iteracoes - 1:
+            print()
+            break
+
+        R1, R2 = xp.random.rand(total_swarms, particulas, 2).astype(xp.float32), xp.random.rand(total_swarms, particulas, 2).astype(xp.float32)
+        V = (W * V) + (C1 * R1 * (Pbest - X)) + (C2 * R2 * (Gbest[:, None, :] - X))
+        X = X + V
+        X[:, :, 0] = xp.clip(X[:, :, 0], 0.0, 1.0)
+        X[:, :, 1] = xp.clip(X[:, :, 1], 0.5, 3.0)
+
+    return xp.asnumpy(Gbest_nash) if HAS_GPU else Gbest_nash
 
 # ==============================================================================
 # 5. CALCULADORA DE MÉTRICAS ESTATÍSTICAS
