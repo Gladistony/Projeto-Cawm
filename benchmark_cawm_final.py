@@ -220,13 +220,14 @@ def pso_escalar_legado(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
     Gbest_nash = -9999.0
     it_sem_melhora = 0
     historico = []
+    iteracao_convergencia = 0
     
     for it in range(iteracoes):
         houve_melhora = False
         nash_array = np.zeros(particulas)
         for i in range(particulas):
             n_val = simular_cawm_vetorizado(np, P, E, Q_obs, mask_calib, area, SUBmax, a_param, np.array([X[i, 0]]), np.array([X[i, 1]]))
-            nash_array[i] = n_val[0]
+            nash_array[i] = round(float(n_val[0]), 3)
             if nash_array[i] > Pbest_nash[i]:
                 Pbest_nash[i] = nash_array[i]
                 Pbest[i] = X[i]
@@ -234,10 +235,11 @@ def pso_escalar_legado(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
                     Gbest_nash = nash_array[i]
                     Gbest = np.copy(X[i])
                     houve_melhora = True
+                    iteracao_convergencia = it + 1
         
         it_sem_melhora = 0 if houve_melhora else it_sem_melhora + 1
         historico.append(Gbest_nash)
-        print(f"      Fase 2 [Legado]: Iteração [{it+1:02d}/{iteracoes}] | NSE: {Gbest_nash:8.5f}", end="\r")
+        print(f"      Fase 2 [Legado]: Iteração [{it+1:02d}/{iteracoes}] | NSE: {Gbest_nash:8.3f}", end="\r")
         if it_sem_melhora >= paciencia or it == iteracoes - 1:
             print()
             break
@@ -249,7 +251,7 @@ def pso_escalar_legado(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
             X[i, 0] = np.clip(X[i, 0], 0.0, 1.0)
             X[i, 1] = np.clip(X[i, 1], 0.5, 3.0)
             
-    return Gbest_nash, historico, float(Gbest[0]), float(Gbest[1])
+    return Gbest_nash, historico, float(Gbest[0]), float(Gbest[1]), iteracao_convergencia
 
 def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iteracoes, paciencia, w, c1, c2):
     P_xp, E_xp, Q_obs_xp = xp.asarray(P), xp.asarray(E), xp.asarray(Q_obs)
@@ -263,9 +265,11 @@ def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
     Gbest_nash = -9999.0
     it_sem_melhora = 0
     historico = []
+    iteracao_convergencia = 0
     
     for it in range(iteracoes):
         nash_array = simular_cawm_vetorizado(xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X[:, 0], X[:, 1])
+        nash_array = xp.round(nash_array, 3)
         melhorias = nash_array > Pbest_nash
         Pbest_nash = xp.where(melhorias, nash_array, Pbest_nash)
         Pbest = xp.where(melhorias[:, None], X, Pbest)
@@ -276,11 +280,12 @@ def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
             Gbest_nash = max_nash
             Gbest = xp.copy(Pbest[idx_max])
             it_sem_melhora = 0
+            iteracao_convergencia = it + 1
         else:
             it_sem_melhora += 1
             
         historico.append(Gbest_nash)
-        print(f"      Fase 2 [Matricial]: Iteração [{it+1:02d}/{iteracoes}] | NSE: {Gbest_nash:8.5f}      ", end="\r")
+        print(f"      Fase 2 [Matricial]: Iteração [{it+1:02d}/{iteracoes}] | NSE: {Gbest_nash:8.3f}      ", end="\r")
         if it_sem_melhora >= paciencia or it == iteracoes - 1:
             print()
             break
@@ -291,7 +296,7 @@ def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
         X[:, 0] = xp.clip(X[:, 0], 0.0, 1.0)
         X[:, 1] = xp.clip(X[:, 1], 0.5, 3.0)
         
-    return Gbest_nash, historico, float(Gbest[0]), float(Gbest[1])
+    return Gbest_nash, historico, float(Gbest[0]), float(Gbest[1]), iteracao_convergencia
 
 def pso_mega_tensor_grid_50(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, hiperparametros, iteracoes, paciencia):
     # Executa a busca na GPU com 50 partículas simultaneamente para todas as 12 combinações (Apenas 1 rodada)
@@ -443,8 +448,9 @@ def executar_benchmark_pajeu():
     ]
     
     xp = cp if HAS_GPU else np
-    iteracoes = 20
-    paciencia = 10
+    iteracoes_grid = 20
+    iteracoes_fase2 = 100
+    paciencia_fase2 = 10
     
     tabela_estatisticas = []
     tabela_benchmark = []
@@ -468,9 +474,9 @@ def executar_benchmark_pajeu():
             # FASE 1: GRID SEARCH (Acha melhores parâmetros para 50P e 2000P)
             # -------------------------------------------------------------------
             print("  [Fase 1] Grid Search Rápido na GPU...")
-            nashes_50 = pso_mega_tensor_grid_50(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 50, hiperparametros, iteracoes, paciencia)
+            nashes_50 = pso_mega_tensor_grid_50(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 50, hiperparametros, iteracoes_grid, paciencia_fase2)
             limpar_memoria_gpu()
-            nashes_2000 = pso_mega_tensor_grid_2000(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 2000, hiperparametros, iteracoes, paciencia)
+            nashes_2000 = pso_mega_tensor_grid_2000(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 2000, hiperparametros, iteracoes_grid, paciencia_fase2)
 
             melhor_hp_50 = hiperparametros[np.argmax(nashes_50)]
             melhor_hp_2000 = hiperparametros[np.argmax(nashes_2000)]
@@ -497,9 +503,9 @@ def executar_benchmark_pajeu():
 
                 t_inicio = time.perf_counter()
                 if xp_backend is None:
-                    nash_final, historico, ks_f, expo_f = funcao_pso(P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes, paciencia, w_opt, c1_opt, c2_opt)
+                    nash_final, historico, ks_f, expo_f, iteracao_conv = funcao_pso(P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes_fase2, paciencia_fase2, w_opt, c1_opt, c2_opt)
                 else:
-                    nash_final, historico, ks_f, expo_f = funcao_pso(xp_backend, P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes, paciencia, w_opt, c1_opt, c2_opt)
+                    nash_final, historico, ks_f, expo_f, iteracao_conv = funcao_pso(xp_backend, P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes_fase2, paciencia_fase2, w_opt, c1_opt, c2_opt)
                     if xp_backend == cp: cp.cuda.Stream.null.synchronize()
                 t_fim = time.perf_counter()
 
@@ -512,7 +518,7 @@ def executar_benchmark_pajeu():
 
                 tabela_benchmark.append({
                     "ID": calib_id, "Bacia": nome_bacia, "Método": nome_metodo, "Partículas": part,
-                    "Tempo(s)": round(tempo_exec, 2), "NSE": round(nash_final, 4)
+                    "Tempo(s)": round(tempo_exec, 2), "NSE": round(nash_final, 4), "Iter_Conv": iteracao_conv
                 })
                 for it, n_val in enumerate(historico):
                     dados_convergencia.append({"ID": calib_id, "Método": nome_metodo, "Iteração": it+1, "NSE": n_val})
