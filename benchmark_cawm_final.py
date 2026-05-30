@@ -1,4 +1,5 @@
 import time
+import gc
 import numpy as np
 import pandas as pd
 
@@ -11,6 +12,14 @@ except ImportError:
 
 from db_init import initialize_db
 from db_models import Bacia, PrecipitationDaily, EvaporationMonthly, FlowDaily, CalibrationPeriod
+
+
+def limpar_memoria_gpu():
+    if not HAS_GPU:
+        return
+    gc.collect()
+    cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
 
 # ==============================================================================
 # 1. FUNÇÃO DE EXTRAÇÃO DE DADOS POR CALIBRATION_ID
@@ -452,79 +461,82 @@ def executar_benchmark_pajeu():
         except Exception as e:
             print(f"Erro ao extrair ID {calib_id}: {e}")
             continue
-            
-        print(f"  Bacia: {nome_bacia} | Método: {metodo} | Calibração: {mask_calib.sum()} dias")
+        try:
+            print(f"  Bacia: {nome_bacia} | Método: {metodo} | Calibração: {mask_calib.sum()} dias")
 
-        # -------------------------------------------------------------------
-        # FASE 1: GRID SEARCH (Acha melhores parâmetros para 50P e 2000P)
-        # -------------------------------------------------------------------
-        print("  [Fase 1] Grid Search Rápido na GPU...")
-        nashes_50 = pso_mega_tensor_grid_50(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 50, hiperparametros, iteracoes, paciencia)
-        nashes_2000 = pso_mega_tensor_grid_2000(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 2000, hiperparametros, iteracoes, paciencia)
-        
-        melhor_hp_50 = hiperparametros[np.argmax(nashes_50)]
-        melhor_hp_2000 = hiperparametros[np.argmax(nashes_2000)]
-        
-        print(f"    Melhor Combo (50P): w={melhor_hp_50['w']}, c1={melhor_hp_50['c1']}, c2={melhor_hp_50['c2']}")
-        print(f"    Melhor Combo (2000P): w={melhor_hp_2000['w']}, c1={melhor_hp_2000['c1']}, c2={melhor_hp_2000['c2']}")
+            # -------------------------------------------------------------------
+            # FASE 1: GRID SEARCH (Acha melhores parâmetros para 50P e 2000P)
+            # -------------------------------------------------------------------
+            print("  [Fase 1] Grid Search Rápido na GPU...")
+            nashes_50 = pso_mega_tensor_grid_50(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 50, hiperparametros, iteracoes, paciencia)
+            limpar_memoria_gpu()
+            nashes_2000 = pso_mega_tensor_grid_2000(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 2000, hiperparametros, iteracoes, paciencia)
 
-        # -------------------------------------------------------------------
-        # FASE 2: BENCHMARK (Roda 1x Legado, 1x CPU, 1x GPU para comparar Tempo)
-        # -------------------------------------------------------------------
-        print("  [Fase 2] Benchmark Comparativo (1 rodada cada)...")
-        configuracoes = [
-            ("Escalar (Legado)", pso_escalar_legado, None, 50, melhor_hp_50),
-            ("Matricial CPU", pso_vetorizado, np, 2000, melhor_hp_2000),
-            ("Matricial GPU", pso_vetorizado, xp, 2000, melhor_hp_2000)
-        ]
-        
-        best_ks_geral, best_expo_geral = 0.0, 0.0
-        
-        for nome_metodo, funcao_pso, xp_backend, part, params in configuracoes:
-            if xp_backend is None and nome_metodo == "Matricial GPU": continue
-            
-            w_opt, c1_opt, c2_opt = params['w'], params['c1'], params['c2']
-            
-            t_inicio = time.perf_counter()
-            if xp_backend is None:
-                nash_final, historico, ks_f, expo_f = funcao_pso(P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes, paciencia, w_opt, c1_opt, c2_opt)
-            else:
-                nash_final, historico, ks_f, expo_f = funcao_pso(xp_backend, P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes, paciencia, w_opt, c1_opt, c2_opt)
-                if xp_backend == cp: cp.cuda.Stream.null.synchronize()
-            t_fim = time.perf_counter()
-            
-            tempo_exec = t_fim - t_inicio
-            print(f"    -> {nome_metodo}: Tempo = {tempo_exec:.2f}s | NSE Final = {nash_final:.4f}")
-            
-            # Guardamos o Ks e Expo da GPU para o cálculo final das estatísticas
-            if nome_metodo == "Matricial GPU":
-                best_ks_geral, best_expo_geral = ks_f, expo_f
-            
-            tabela_benchmark.append({
-                "ID": calib_id, "Bacia": nome_bacia, "Método": nome_metodo, "Partículas": part,
-                "Tempo(s)": round(tempo_exec, 2), "NSE": round(nash_final, 4)
+            melhor_hp_50 = hiperparametros[np.argmax(nashes_50)]
+            melhor_hp_2000 = hiperparametros[np.argmax(nashes_2000)]
+
+            print(f"    Melhor Combo (50P): w={melhor_hp_50['w']}, c1={melhor_hp_50['c1']}, c2={melhor_hp_50['c2']}")
+            print(f"    Melhor Combo (2000P): w={melhor_hp_2000['w']}, c1={melhor_hp_2000['c1']}, c2={melhor_hp_2000['c2']}")
+
+            # -------------------------------------------------------------------
+            # FASE 2: BENCHMARK (Roda 1x Legado, 1x CPU, 1x GPU para comparar Tempo)
+            # -------------------------------------------------------------------
+            print("  [Fase 2] Benchmark Comparativo (1 rodada cada)...")
+            configuracoes = [
+                ("Escalar (Legado)", pso_escalar_legado, None, 50, melhor_hp_50),
+                ("Matricial CPU", pso_vetorizado, np, 2000, melhor_hp_2000),
+                ("Matricial GPU", pso_vetorizado, xp, 2000, melhor_hp_2000)
+            ]
+
+            best_ks_geral, best_expo_geral = 0.0, 0.0
+
+            for nome_metodo, funcao_pso, xp_backend, part, params in configuracoes:
+                if xp_backend is None and nome_metodo == "Matricial GPU": continue
+
+                w_opt, c1_opt, c2_opt = params['w'], params['c1'], params['c2']
+
+                t_inicio = time.perf_counter()
+                if xp_backend is None:
+                    nash_final, historico, ks_f, expo_f = funcao_pso(P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes, paciencia, w_opt, c1_opt, c2_opt)
+                else:
+                    nash_final, historico, ks_f, expo_f = funcao_pso(xp_backend, P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes, paciencia, w_opt, c1_opt, c2_opt)
+                    if xp_backend == cp: cp.cuda.Stream.null.synchronize()
+                t_fim = time.perf_counter()
+
+                tempo_exec = t_fim - t_inicio
+                print(f"    -> {nome_metodo}: Tempo = {tempo_exec:.2f}s | NSE Final = {nash_final:.4f}")
+
+                # Guardamos o Ks e Expo da GPU para o cálculo final das estatísticas
+                if nome_metodo == "Matricial GPU":
+                    best_ks_geral, best_expo_geral = ks_f, expo_f
+
+                tabela_benchmark.append({
+                    "ID": calib_id, "Bacia": nome_bacia, "Método": nome_metodo, "Partículas": part,
+                    "Tempo(s)": round(tempo_exec, 2), "NSE": round(nash_final, 4)
+                })
+                for it, n_val in enumerate(historico):
+                    dados_convergencia.append({"ID": calib_id, "Método": nome_metodo, "Iteração": it+1, "NSE": n_val})
+
+            # -------------------------------------------------------------------
+            # FASE 3: ESTATÍSTICAS COMPLETAS (O pedido da Professora)
+            # -------------------------------------------------------------------
+            print("  [Fase 3] Validando série e calculando métricas...")
+            Q_calc_total, kl_calc = simular_forward_determinista(P, E, Q_obs, mask_calib, area, SUBmax, a_param, best_ks_geral, best_expo_geral)
+
+            Q_obs_calib, Q_calc_calib = Q_obs[mask_calib], Q_calc_total[mask_calib]
+            Q_obs_valid, Q_calc_valid = Q_obs[mask_valid], Q_calc_total[mask_valid]
+
+            nse_c, nsel_c, nses_c, pbias_c, rmse_c = calcular_metricas(Q_obs_calib, Q_calc_calib)
+            nse_v, nsel_v, nses_v, pbias_v, rmse_v = calcular_metricas(Q_obs_valid, Q_calc_valid)
+
+            tabela_estatisticas.append({
+                "ID": calib_id, "Bacia": nome_bacia, "Metodo": metodo,
+                "Ks": round(best_ks_geral, 4), "Kl": round(kl_calc, 4), "Expo": round(best_expo_geral, 4),
+                "NSE_Cal": round(nse_c, 4), "NSE_Log_Cal": round(nsel_c, 4), "NSE_Sqrt_Cal": round(nses_c, 4), "PBIAS_Cal": round(pbias_c, 2), "RMSE_Cal": round(rmse_c, 2),
+                "NSE_Val": round(nse_v, 4), "NSE_Log_Val": round(nsel_v, 4), "NSE_Sqrt_Val": round(nses_v, 4), "PBIAS_Val": round(pbias_v, 2), "RMSE_Val": round(rmse_v, 2)
             })
-            for it, n_val in enumerate(historico):
-                dados_convergencia.append({"ID": calib_id, "Método": nome_metodo, "Iteração": it+1, "NSE": n_val})
-
-        # -------------------------------------------------------------------
-        # FASE 3: ESTATÍSTICAS COMPLETAS (O pedido da Professora)
-        # -------------------------------------------------------------------
-        print("  [Fase 3] Validando série e calculando métricas...")
-        Q_calc_total, kl_calc = simular_forward_determinista(P, E, Q_obs, mask_calib, area, SUBmax, a_param, best_ks_geral, best_expo_geral)
-
-        Q_obs_calib, Q_calc_calib = Q_obs[mask_calib], Q_calc_total[mask_calib]
-        Q_obs_valid, Q_calc_valid = Q_obs[mask_valid], Q_calc_total[mask_valid]
-
-        nse_c, nsel_c, nses_c, pbias_c, rmse_c = calcular_metricas(Q_obs_calib, Q_calc_calib)
-        nse_v, nsel_v, nses_v, pbias_v, rmse_v = calcular_metricas(Q_obs_valid, Q_calc_valid)
-
-        tabela_estatisticas.append({
-            "ID": calib_id, "Bacia": nome_bacia, "Metodo": metodo,
-            "Ks": round(best_ks_geral, 4), "Kl": round(kl_calc, 4), "Expo": round(best_expo_geral, 4),
-            "NSE_Cal": round(nse_c, 4), "NSE_Log_Cal": round(nsel_c, 4), "NSE_Sqrt_Cal": round(nses_c, 4), "PBIAS_Cal": round(pbias_c, 2), "RMSE_Cal": round(rmse_c, 2),
-            "NSE_Val": round(nse_v, 4), "NSE_Log_Val": round(nsel_v, 4), "NSE_Sqrt_Val": round(nses_v, 4), "PBIAS_Val": round(pbias_v, 2), "RMSE_Val": round(rmse_v, 2)
-        })
+        finally:
+            limpar_memoria_gpu()
 
     # ==========================================================
     # GERAÇÃO DOS CSVs FINAIS
