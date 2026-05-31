@@ -92,61 +92,63 @@ def simular_cawm_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 
     else: k_calha = 0.0028
         
     F_conversao = (area * 1000000.0 / T_sec) / 1000.0
-    ret_corrig = xp.zeros(particulas, dtype=xp.float32)
-    reserv_solo_corrig = xp.zeros(particulas, dtype=xp.float32)
-    S3 = xp.zeros(particulas, dtype=xp.float32)
-
-    C_hist = xp.zeros((dias, particulas), dtype=xp.float32)
-    C_expo_hist = xp.zeros((dias, particulas), dtype=xp.float32)
-
-    for d in range(dias):
-        P_d, E_d = P[d], E[d]
-        evap_inicial = xp.where(ret_corrig + P_d >= E_d, E_d, ret_corrig + P_d)
-        ret_corrig = xp.maximum(ret_corrig + P_d - evap_inicial, 0.0)
-        evap_n_atendida = E_d - evap_inicial
-
-        Pn_pos = xp.maximum(P_d - evap_inicial, 0.0)
-        hiperb = xp.tanh(Pn_pos / SUBmax)
-        reserv_solo = xp.minimum(reserv_solo_corrig, SUBmax)
-        Sub = reserv_solo / SUBmax
-        
-        Ps = (SUBmax * (1.0 - Sub**2) * hiperb) / (1.0 + Sub * hiperb + 1e-9)
-        escoamento = P_d - evap_inicial - Ps
-
-        E_comp = (1.0 - xp.exp(-a_param * (reserv_solo / SUBmax))) * evap_n_atendida
-        RE = xp.minimum(xp.minimum(evap_n_atendida, reserv_solo), E_comp)
-        Solo = xp.maximum(reserv_solo - RE, 0.0)
-        rec_rio = ks_array * Solo
-
-        S1 = xp.maximum(S3 + escoamento + rec_rio, 0.0)
-        C = xp.minimum(k_calha * (S1 ** b), S1)
-        S3 = S1 - C
-        reserv_solo_corrig = xp.maximum(Solo + Ps - rec_rio, 0.0)
-
-        C_hist[d, :] = C
-        C_expo_hist[d, :] = C ** expo_array
-
     mask_xp = xp.asarray(mask_calib)
     Q_obs_masked = Q_obs[mask_xp]
     vol_obs_mm = xp.sum(Q_obs_masked) / F_conversao
-    
-    C_hist_masked = C_hist[mask_xp, :]
-    C_expo_hist_masked = C_expo_hist[mask_xp, :]
-    soma_C_masked = xp.sum(C_hist_masked, axis=0)
-    soma_C_expo_masked = xp.sum(C_expo_hist_masked, axis=0)
-    
-    kl_array = xp.maximum((soma_C_masked - vol_obs_mm) / (soma_C_expo_masked + 1e-9), 0.0) 
 
-    Q_calc_hist = xp.zeros((dias, particulas), dtype=xp.float32)
-    for d in range(dias):
-        perdas = xp.minimum(kl_array * C_expo_hist[d, :], C_hist[d, :])
-        Q_calc_hist[d, :] = (C_hist[d, :] - perdas) * F_conversao
+    def executar_passagem(calcular_erro: bool = False, kl_array=None):
+        ret_corrig = xp.zeros(particulas, dtype=xp.float32)
+        reserv_solo_corrig = xp.zeros(particulas, dtype=xp.float32)
+        S3 = xp.zeros(particulas, dtype=xp.float32)
 
-    Q_calc_masked = Q_calc_hist[mask_xp, :]
-    media_obs = xp.mean(Q_obs_masked)
-    denominador_nash = xp.sum((Q_obs_masked - media_obs)**2) + 1e-9
-    numerador_nash = xp.sum((xp.expand_dims(Q_obs_masked, 1) - Q_calc_masked)**2, axis=0)
-    nash_array = 1.0 - (numerador_nash / denominador_nash)
+        soma_C_masked = xp.zeros(particulas, dtype=xp.float32)
+        soma_C_expo_masked = xp.zeros(particulas, dtype=xp.float32)
+        numerador_nash = xp.zeros(particulas, dtype=xp.float32)
+
+        idx_mask = 0
+        for d in range(dias):
+            P_d, E_d = P[d], E[d]
+            evap_inicial = xp.where(ret_corrig + P_d >= E_d, E_d, ret_corrig + P_d)
+            ret_corrig = xp.maximum(ret_corrig + P_d - evap_inicial, 0.0)
+            evap_n_atendida = E_d - evap_inicial
+
+            Pn_pos = xp.maximum(P_d - evap_inicial, 0.0)
+            hiperb = xp.tanh(Pn_pos / SUBmax)
+            reserv_solo = xp.minimum(reserv_solo_corrig, SUBmax)
+            Sub = reserv_solo / SUBmax
+
+            Ps = (SUBmax * (1.0 - Sub**2) * hiperb) / (1.0 + Sub * hiperb + 1e-9)
+            escoamento = P_d - evap_inicial - Ps
+
+            E_comp = (1.0 - xp.exp(-a_param * (reserv_solo / SUBmax))) * evap_n_atendida
+            RE = xp.minimum(xp.minimum(evap_n_atendida, reserv_solo), E_comp)
+            Solo = xp.maximum(reserv_solo - RE, 0.0)
+            rec_rio = ks_array * Solo
+
+            S1 = xp.maximum(S3 + escoamento + rec_rio, 0.0)
+            C = xp.minimum(k_calha * (S1 ** b), S1)
+            S3 = S1 - C
+            reserv_solo_corrig = xp.maximum(Solo + Ps - rec_rio, 0.0)
+
+            C_expo = C ** expo_array
+            if mask_calib[d]:
+                soma_C_masked = soma_C_masked + C
+                soma_C_expo_masked = soma_C_expo_masked + C_expo
+                if calcular_erro:
+                    Q_calc_d = (C - xp.minimum(kl_array * C_expo, C)) * F_conversao
+                    erro_d = Q_obs_masked[idx_mask] - Q_calc_d
+                    numerador_nash = numerador_nash + (erro_d ** 2)
+                    idx_mask += 1
+
+        if calcular_erro:
+            denominador_nash = xp.sum((Q_obs_masked - xp.mean(Q_obs_masked))**2) + 1e-9
+            return 1.0 - (numerador_nash / denominador_nash)
+
+        return soma_C_masked, soma_C_expo_masked
+
+    soma_C_masked, soma_C_expo_masked = executar_passagem(calcular_erro=False)
+    kl_array = xp.maximum((soma_C_masked - vol_obs_mm) / (soma_C_expo_masked + 1e-9), 0.0)
+    nash_array = executar_passagem(calcular_erro=True, kl_array=kl_array)
 
     return nash_array
 
