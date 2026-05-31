@@ -720,6 +720,7 @@ def executar_benchmark_pajeu():
 ]
     
     xp = cp if HAS_GPU else np
+    xp_fase1 = np
     iteracoes_grid = 50
     paciencia_grid = 10
     iteracoes_fase2 = 100
@@ -748,21 +749,20 @@ def executar_benchmark_pajeu():
             # -------------------------------------------------------------------
             # FASE 1: GRID SEARCH (Acha melhores parâmetros para 50P e 2000P)
             # -------------------------------------------------------------------
-            print("  [Fase 1] Grid Search Rápido na GPU...")
+            print("  [Fase 1] Grid Search Rápido na CPU vetorizada...")
             print(f"    Repetições: {repeticoes_fase1} | Paralelismo: {processos_paralelos_fase1} | Iterações: {iteracoes_grid} | Paciencia: {paciencia_grid}")
             t_calib_inicio = time.perf_counter()
             nashes_50, nse_50 = pso_mega_tensor_grid_repetido(
-                xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 50, hiperparametros,
+                xp_fase1, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 50, hiperparametros,
                 iteracoes_grid, paciencia_grid, repeticoes_fase1, processos_paralelos_fase1, fo=FO_SELECTION,
             )
-            limpar_memoria_gpu()
             nashes_2000, nse_2000 = pso_mega_tensor_grid_repetido(
-                xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 2000, hiperparametros,
+                xp_fase1, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 2000, hiperparametros,
                 iteracoes_grid, paciencia_grid, repeticoes_fase1, processos_paralelos_fase1, fo=FO_SELECTION,
             )
 
-            idx_50 = int(xp.argmax(nashes_50))
-            idx_2000 = int(xp.argmax(nashes_2000))
+            idx_50 = int(np.argmax(nashes_50))
+            idx_2000 = int(np.argmax(nashes_2000))
             melhor_hp_50 = hiperparametros[idx_50]
             melhor_hp_2000 = hiperparametros[idx_2000]
             tempo_calibracao_pso = time.perf_counter() - t_calib_inicio
