@@ -597,6 +597,7 @@ def executar_benchmark_pajeu():
             # -------------------------------------------------------------------
             print("  [Fase 1] Grid Search Rápido na GPU...")
             print(f"    Repetições: {repeticoes_fase1} | Paralelismo: {processos_paralelos_fase1} | Iterações: {iteracoes_grid} | Paciencia: {paciencia_grid}")
+            t_calib_inicio = time.perf_counter()
             nashes_50, nse_50 = pso_mega_tensor_grid_repetido(
                 xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 50, hiperparametros,
                 iteracoes_grid, paciencia_grid, repeticoes_fase1, processos_paralelos_fase1,
@@ -611,8 +612,10 @@ def executar_benchmark_pajeu():
             idx_2000 = int(xp.argmax(nashes_2000))
             melhor_hp_50 = hiperparametros[idx_50]
             melhor_hp_2000 = hiperparametros[idx_2000]
+            tempo_calibracao_pso = time.perf_counter() - t_calib_inicio
             print(f"    Melhor Combo (50P): w={melhor_hp_50['w']}, c1={melhor_hp_50['c1']}, c2={melhor_hp_50['c2']} | FO Médio={float(nashes_50[idx_50]):.5f} | NSE Médio={float(nse_50[idx_50]):.5f}")
             print(f"    Melhor Combo (2000P): w={melhor_hp_2000['w']}, c1={melhor_hp_2000['c1']}, c2={melhor_hp_2000['c2']} | FO Médio={float(nashes_2000[idx_2000]):.5f} | NSE Médio={float(nse_2000[idx_2000]):.5f}")
+            print(f"    Tempo total de calibração dos parâmetros do PSO: {tempo_calibracao_pso:.2f}s")
 
             # -------------------------------------------------------------------
             # FASE 2: BENCHMARK (Roda 1x Legado, 1x CPU, 1x GPU para comparar Tempo)
@@ -620,6 +623,8 @@ def executar_benchmark_pajeu():
             print("  [Fase 2] Benchmark Comparativo (1 rodada cada)...")
             configuracoes = [
                 ("Escalar (Legado)", pso_escalar_legado, None, 50, melhor_hp_50),
+                #("Matricial CPU 50P", pso_vetorizado, np, 50, melhor_hp_50),
+                #("Matricial GPU 50P", pso_vetorizado, xp, 50, melhor_hp_50),
                 ("Matricial CPU", pso_vetorizado, np, 2000, melhor_hp_2000),
                 ("Matricial GPU", pso_vetorizado, xp, 2000, melhor_hp_2000)
             ]
@@ -648,6 +653,7 @@ def executar_benchmark_pajeu():
 
                 tabela_benchmark.append({
                     "ID": calib_id, "Bacia": nome_bacia, "Método": nome_metodo, "Partículas": part,
+                    "Tempo_Calib_PSO(s)": round(tempo_calibracao_pso, 2),
                     "Tempo(s)": round(tempo_exec, 2), "FO": round(nash_final, 4), "NSE": round(nse_final, 4), "Iter_Conv": iteracao_conv
                 })
                 for it, n_val in enumerate(historico):
