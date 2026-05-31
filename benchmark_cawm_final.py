@@ -13,6 +13,10 @@ except ImportError:
 from db_init import initialize_db
 from db_models import Bacia, PrecipitationDaily, EvaporationMonthly, FlowDaily, CalibrationPeriod
 
+# Constante para seleção da Função Objetivo (FO)
+# Opções suportadas: 'fo1' (padrão), 'fo2'/'composite' (NSE + NSE_sqrt), 'kge'/'fo_kge'
+FO_SELECTION = 'fo1'
+
 
 def limpar_memoria_gpu():
     if not HAS_GPU:
@@ -81,7 +85,7 @@ def extrair_dados_por_id(calib_id: int):
 # ==============================================================================
 # 2. MOTOR DO CAWM VETORIZADO PARA O PSO
 # ==============================================================================
-def simular_cawm_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, ks_array, expo_array):
+def simular_cawm_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, ks_array, expo_array, fo='fo1'):
     dias = len(P)
     particulas = len(ks_array)
     b = 1.666666667
@@ -95,6 +99,7 @@ def simular_cawm_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 
     mask_xp = xp.asarray(mask_calib)
     Q_obs_masked = Q_obs[mask_xp]
     vol_obs_mm = xp.sum(Q_obs_masked) / F_conversao
+    n_masked = int(xp.sum(mask_xp))
 
     def executar_passagem(calcular_erro: bool = False, kl_array=None):
         ret_corrig = xp.zeros(particulas, dtype=xp.float32)
@@ -105,6 +110,22 @@ def simular_cawm_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 
         soma_C_expo_masked = xp.zeros(particulas, dtype=xp.float32)
         numerador_nash = xp.zeros(particulas, dtype=xp.float32)
         soma_qcalc_masked = xp.zeros(particulas, dtype=xp.float32)
+
+        # Acumuladores para estatísticas evitando armazenar matriz completa (otimização de memória)
+        qcalc_masked = None
+        sum_qcalc = None
+        sum_qcalc2 = None
+        sum_qcalc_qobs = None
+        sum_sqrtqcalc_sqrtqobs = None
+        if calcular_erro and fo in ('fo2', 'composite'):
+            sum_qcalc = xp.zeros(particulas, dtype=xp.float32)
+            sum_qcalc2 = xp.zeros(particulas, dtype=xp.float32)
+            sum_qcalc_qobs = xp.zeros(particulas, dtype=xp.float32)
+            sum_sqrtqcalc_sqrtqobs = xp.zeros(particulas, dtype=xp.float32)
+        elif calcular_erro and fo in ('kge', 'fo_kge'):
+            sum_qcalc = xp.zeros(particulas, dtype=xp.float32)
+            sum_qcalc2 = xp.zeros(particulas, dtype=xp.float32)
+            sum_qcalc_qobs = xp.zeros(particulas, dtype=xp.float32)
 
         idx_mask = 0
         for d in range(dias):
@@ -138,21 +159,74 @@ def simular_cawm_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 
                 if calcular_erro:
                     Q_calc_d = (C - xp.minimum(kl_array * C_expo, C)) * F_conversao
                     soma_qcalc_masked = soma_qcalc_masked + Q_calc_d
+                    # Acumula estatísticas por partícula para FO alternativa (sem armazenar matriz completa)
+                    if sum_qcalc is not None:
+                        sum_qcalc = sum_qcalc + Q_calc_d
+                        sum_qcalc2 = sum_qcalc2 + (Q_calc_d * Q_calc_d)
+                        sum_qcalc_qobs = sum_qcalc_qobs + (Q_calc_d * Q_obs_masked[idx_mask])
+                    if sum_sqrtqcalc_sqrtqobs is not None:
+                        sum_sqrtqcalc_sqrtqobs = sum_sqrtqcalc_sqrtqobs + xp.sqrt(xp.maximum(Q_calc_d, 0.0)) * xp.sqrt(xp.maximum(Q_obs_masked[idx_mask], 0.0))
                     erro_d = Q_obs_masked[idx_mask] - Q_calc_d
                     numerador_nash = numerador_nash + (erro_d ** 2)
                     idx_mask += 1
 
         if calcular_erro:
             denominador_nash = xp.sum((Q_obs_masked - xp.mean(Q_obs_masked))**2) + 1e-9
-            return 1.0 - (numerador_nash / denominador_nash), soma_qcalc_masked
+            nash_array = 1.0 - (numerador_nash / denominador_nash)
+            # Retorna também os acumuladores para cálculo de FO sem a matriz completa
+            return nash_array, soma_qcalc_masked, (sum_qcalc, sum_qcalc2, sum_qcalc_qobs, sum_sqrtqcalc_sqrtqobs)
 
-        return soma_C_masked, soma_C_expo_masked
+        return soma_C_masked, soma_C_expo_masked, None
 
-    soma_C_masked, soma_C_expo_masked = executar_passagem(calcular_erro=False)
+    soma_C_masked, soma_C_expo_masked, _ = executar_passagem(calcular_erro=False)
     kl_array = xp.maximum((soma_C_masked - vol_obs_mm) / (soma_C_expo_masked + 1e-9), 0.0)
-    nash_array, soma_qcalc_masked = executar_passagem(calcular_erro=True, kl_array=kl_array)
+    nash_array, soma_qcalc_masked, accumulators = executar_passagem(calcular_erro=True, kl_array=kl_array)
 
-    fo_array = calcular_fo(xp, nash_array, soma_qcalc_masked, xp.sum(Q_obs_masked))
+    # Seleciona a função objetivo conforme solicitado (usando acumuladores quando possível)
+    if fo in ('fo1', 'default'):
+        fo_array = calcular_fo(xp, nash_array, soma_qcalc_masked, xp.sum(Q_obs_masked))
+    elif fo in ('fo2', 'composite'):
+        sums = accumulators
+        if sums[0] is None:
+            fo_array = calcular_fo(xp, nash_array, soma_qcalc_masked, xp.sum(Q_obs_masked))
+        else:
+            sum_qcalc, sum_qcalc2, sum_qcalc_qobs, sum_sqrtqcalc_sqrtqobs = sums
+            # Denominadores e constantes
+            media_obs = xp.mean(Q_obs_masked)
+            denom_nse = xp.sum((Q_obs_masked - media_obs)**2) + 1e-9
+
+            # NSE clássico já disponível como nash_array (a partir do numerador acumulado), mas recalculamos por consistência
+            numerador_nse = sum_qcalc2 - 2.0 * sum_qcalc_qobs + xp.sum(Q_obs_masked * Q_obs_masked)
+            nse = 1.0 - (numerador_nse / denom_nse)
+
+            # NSE raiz quadrada
+            qobs_sqrt = xp.sqrt(xp.maximum(Q_obs_masked, 0.0))
+            media_obs_sqrt = xp.mean(qobs_sqrt)
+            denom_sqrt = xp.sum((qobs_sqrt - media_obs_sqrt)**2) + 1e-9
+            numerador_sqrt = sum_qcalc - 2.0 * sum_sqrtqcalc_sqrtqobs + xp.sum(Q_obs_masked)
+            nse_sqrt = 1.0 - (numerador_sqrt / denom_sqrt)
+
+            fo_array = (nse * 0.5) + (nse_sqrt * 0.5)
+    elif fo in ('kge', 'fo_kge'):
+        sums = accumulators
+        if sums[0] is None:
+            fo_array = calcular_fo(xp, nash_array, soma_qcalc_masked, xp.sum(Q_obs_masked))
+        else:
+            sum_qcalc, sum_qcalc2, sum_qcalc_qobs, _ = sums
+            n = float(n_masked)
+            media_obs = xp.mean(Q_obs_masked)
+            std_obs = xp.std(Q_obs_masked) + 1e-9
+
+            media_sim = sum_qcalc / n
+            var_sim = (sum_qcalc2 / n) - (media_sim ** 2)
+            std_sim = xp.sqrt(xp.maximum(var_sim, 1e-12))
+            cov = (sum_qcalc_qobs / n) - (media_sim * media_obs)
+            r = cov / (std_sim * std_obs + 1e-9)
+            alpha = std_sim / (std_obs + 1e-9)
+            beta = (sum_qcalc / n) / (media_obs + 1e-9)
+            fo_array = 1.0 - xp.sqrt((r - 1.0)**2 + (alpha - 1.0)**2 + (beta - 1.0)**2)
+    else:
+        fo_array = calcular_fo(xp, nash_array, soma_qcalc_masked, xp.sum(Q_obs_masked))
 
     return fo_array, nash_array
 
@@ -165,6 +239,42 @@ def calcular_fo(xp, nash_array, soma_qcalc_masked, soma_qobs_masked, eps=1e-9, s
     """
     soma_abs = xp.abs(soma_qcalc_masked - soma_qobs_masked) + eps
     return (nash_array / soma_abs) * scale
+
+def calcular_fo2(xp, qcalc_masked, qobs_masked, eps=1e-9):
+    """
+    Calcula a FO Composta: 50% NSE Clássico + 50% NSE Raiz Quadrada.
+    qcalc_masked: Matriz 2D (particulas, dias) - Vazões simuladas
+    qobs_masked: Array 1D (dias) - Vazões observadas
+    Usa operações do backend `xp` (numpy ou cupy).
+    """
+    # Média da série observada
+    media_obs = xp.mean(qobs_masked)
+    
+    # ==========================================
+    # 1. Cálculo do NSE Clássico (Foco nos picos)
+    # ==========================================
+    numerador_nse = xp.sum((qcalc_masked - qobs_masked)**2, axis=1)
+    denominador_nse = xp.sum((qobs_masked - media_obs)**2) + eps
+    nse = 1.0 - (numerador_nse / denominador_nse)
+    
+    # ==========================================
+    # 2. Cálculo do NSE Raiz Quadrada (Foco nas médias/recessão)
+    # ==========================================
+    # O xp.maximum garante que pequenos erros de precisão do float não gerem raiz de negativo
+    qcalc_sqrt = xp.sqrt(xp.maximum(qcalc_masked, 0.0))
+    qobs_sqrt = xp.sqrt(xp.maximum(qobs_masked, 0.0))
+    media_obs_sqrt = xp.mean(qobs_sqrt)
+    
+    numerador_sqrt = xp.sum((qcalc_sqrt - qobs_sqrt)**2, axis=1)
+    denominador_sqrt = xp.sum((qobs_sqrt - media_obs_sqrt)**2) + eps
+    nse_sqrt = 1.0 - (numerador_sqrt / denominador_sqrt)
+    
+    # ==========================================
+    # 3. Retorno da Função Objetivo Composta
+    # ==========================================
+    # O PSO vai tentar maximizar esta média. 
+    # O modelo é forçado a ser "bom nas cheias" E "bom na recessão".
+    return (nse * 0.5) + (nse_sqrt * 0.5)
 
 def calcular_fo_kge(xp, qcalc_masked, qobs_masked, eps=1e-9):
     """
@@ -259,7 +369,7 @@ def simular_forward_determinista(P, E, Q_obs, mask_calib, area, SUBmax, a_param,
 # ==============================================================================
 # 4. ALGORITMOS DE OTIMIZAÇÃO (Legado, CPU Vetorizado e GPU Vetorizado)
 # ==============================================================================
-def pso_escalar_legado(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iteracoes, paciencia, w, c1, c2):
+def pso_escalar_legado(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iteracoes, paciencia, w, c1, c2, fo='fo1'):
     X = np.random.rand(particulas, 2)
     X[:, 0] = X[:, 0] * 1.0
     X[:, 1] = X[:, 1] * 2.5 + 0.5
@@ -278,7 +388,7 @@ def pso_escalar_legado(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
         nash_array = np.zeros(particulas)
         nse_array = np.zeros(particulas)
         for i in range(particulas):
-            fo_val, nse_val = simular_cawm_vetorizado(np, P, E, Q_obs, mask_calib, area, SUBmax, a_param, np.array([X[i, 0]]), np.array([X[i, 1]]))
+            fo_val, nse_val = simular_cawm_vetorizado(np, P, E, Q_obs, mask_calib, area, SUBmax, a_param, np.array([X[i, 0]]), np.array([X[i, 1]]), fo=fo)
             nash_array[i] = round(float(fo_val[0]), 3)
             nse_array[i] = round(float(nse_val[0]), 3)
             if nash_array[i] > Pbest_nash[i]:
@@ -307,7 +417,7 @@ def pso_escalar_legado(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
             
     return Gbest_nash, Gbest_nse, historico, float(Gbest[0]), float(Gbest[1]), iteracao_convergencia
 
-def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iteracoes, paciencia, w, c1, c2):
+def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iteracoes, paciencia, w, c1, c2, fo='fo1'):
     P_xp, E_xp, Q_obs_xp = xp.asarray(P), xp.asarray(E), xp.asarray(Q_obs)
     X = xp.random.rand(particulas, 2).astype(xp.float32)
     X[:, 0] = X[:, 0] * 1.0
@@ -323,7 +433,7 @@ def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
     iteracao_convergencia = 0
     
     for it in range(iteracoes):
-        fo_array, nse_array = simular_cawm_vetorizado(xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X[:, 0], X[:, 1])
+        fo_array, nse_array = simular_cawm_vetorizado(xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X[:, 0], X[:, 1], fo=fo)
         nash_array = xp.round(fo_array, 3)
         nse_array = xp.round(nse_array, 3)
         melhorias = nash_array > Pbest_nash
@@ -355,7 +465,7 @@ def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
         
     return Gbest_nash, Gbest_nse, historico, float(Gbest[0]), float(Gbest[1]), iteracao_convergencia
 
-def pso_mega_tensor_grid_50(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, hiperparametros, iteracoes, paciencia):
+def pso_mega_tensor_grid_50(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, hiperparametros, iteracoes, paciencia, fo='fo1'):
     # Executa a busca na GPU com 50 partículas simultaneamente para todas as 12 combinações (Apenas 1 rodada)
     Nc = len(hiperparametros)
     total_swarms = Nc
@@ -381,7 +491,7 @@ def pso_mega_tensor_grid_50(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 
     
     for it in range(iteracoes):
         X_flat = X.reshape(total_particulas, 2)
-        nash_flat, _ = simular_cawm_vetorizado(xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X_flat[:, 0], X_flat[:, 1])
+        nash_flat, _ = simular_cawm_vetorizado(xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X_flat[:, 0], X_flat[:, 1], fo=fo)
         nash_array = nash_flat.reshape(total_swarms, particulas)
         melhorias = nash_array > Pbest_nash
         Pbest_nash = xp.where(melhorias, nash_array, Pbest_nash)
@@ -411,7 +521,7 @@ def pso_mega_tensor_grid_50(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 
         
     return xp.asnumpy(Gbest_nash) if HAS_GPU else Gbest_nash
 
-def pso_mega_tensor_grid_2000(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, hiperparametros, iteracoes, paciencia):
+def pso_mega_tensor_grid_2000(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, hiperparametros, iteracoes, paciencia, fo='fo1'):
     # Executa a busca na GPU com todas as combinações em paralelo, igual ao grid de 50P.
     # Se a memória não aguentar, o erro vai aparecer aqui de forma explícita.
     Nc = len(hiperparametros)
@@ -437,7 +547,7 @@ def pso_mega_tensor_grid_2000(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param
 
     for it in range(iteracoes):
         X_flat = X.reshape(total_particulas, 2)
-        nash_flat, _ = simular_cawm_vetorizado(xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X_flat[:, 0], X_flat[:, 1])
+        nash_flat, _ = simular_cawm_vetorizado(xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X_flat[:, 0], X_flat[:, 1], fo=fo)
         nash_array = nash_flat.reshape(total_swarms, particulas)
         melhorias = nash_array > Pbest_nash
         Pbest_nash = xp.where(melhorias, nash_array, Pbest_nash)
@@ -467,7 +577,7 @@ def pso_mega_tensor_grid_2000(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param
 
     return xp.asnumpy(Gbest_nash) if HAS_GPU else Gbest_nash
 
-def pso_mega_tensor_grid_repetido(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, hiperparametros, iteracoes, paciencia, repeticoes, processos_paralelos):
+def pso_mega_tensor_grid_repetido(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, hiperparametros, iteracoes, paciencia, repeticoes, processos_paralelos, fo='fo1'):
     # Executa várias buscas completas em lotes paralelos na GPU e devolve a média da FO/NSE por combinação.
     Nc = len(hiperparametros)
     P_xp, E_xp, Q_obs_xp = xp.asarray(P), xp.asarray(E), xp.asarray(Q_obs)
@@ -501,7 +611,7 @@ def pso_mega_tensor_grid_repetido(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_p
 
         for it in range(iteracoes):
             X_flat = X.reshape(lote * Nc * particulas, 2)
-            fo_flat, nse_flat = simular_cawm_vetorizado(xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X_flat[:, 0], X_flat[:, 1])
+            fo_flat, nse_flat = simular_cawm_vetorizado(xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X_flat[:, 0], X_flat[:, 1], fo=fo)
             fo_array = fo_flat.reshape(lote, Nc, particulas)
             nse_array = nse_flat.reshape(lote, Nc, particulas)
 
@@ -643,12 +753,12 @@ def executar_benchmark_pajeu():
             t_calib_inicio = time.perf_counter()
             nashes_50, nse_50 = pso_mega_tensor_grid_repetido(
                 xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 50, hiperparametros,
-                iteracoes_grid, paciencia_grid, repeticoes_fase1, processos_paralelos_fase1,
+                iteracoes_grid, paciencia_grid, repeticoes_fase1, processos_paralelos_fase1, fo=FO_SELECTION,
             )
             limpar_memoria_gpu()
             nashes_2000, nse_2000 = pso_mega_tensor_grid_repetido(
                 xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 2000, hiperparametros,
-                iteracoes_grid, paciencia_grid, repeticoes_fase1, processos_paralelos_fase1,
+                iteracoes_grid, paciencia_grid, repeticoes_fase1, processos_paralelos_fase1, fo=FO_SELECTION,
             )
 
             idx_50 = int(xp.argmax(nashes_50))
@@ -681,9 +791,9 @@ def executar_benchmark_pajeu():
 
                 t_inicio = time.perf_counter()
                 if xp_backend is None:
-                    nash_final, nse_final, historico, ks_f, expo_f, iteracao_conv = funcao_pso(P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes_fase2, paciencia_fase2, w_opt, c1_opt, c2_opt)
+                    nash_final, nse_final, historico, ks_f, expo_f, iteracao_conv = funcao_pso(P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes_fase2, paciencia_fase2, w_opt, c1_opt, c2_opt, fo=FO_SELECTION)
                 else:
-                    nash_final, nse_final, historico, ks_f, expo_f, iteracao_conv = funcao_pso(xp_backend, P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes_fase2, paciencia_fase2, w_opt, c1_opt, c2_opt)
+                    nash_final, nse_final, historico, ks_f, expo_f, iteracao_conv = funcao_pso(xp_backend, P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes_fase2, paciencia_fase2, w_opt, c1_opt, c2_opt, fo=FO_SELECTION)
                     if xp_backend == cp: cp.cuda.Stream.null.synchronize()
                 t_fim = time.perf_counter()
 
