@@ -435,6 +435,18 @@ def calcular_metricas(Q_obs, Q_calc):
     Q_obs_log = np.log(Q_obs + eps)
     Q_calc_log = np.log(Q_calc + eps)
     nse_log = 1 - (np.sum((Q_obs_log - Q_calc_log)**2) / (np.sum((Q_obs_log - np.mean(Q_obs_log))**2) + eps))
+
+    obs_legacy = np.nan_to_num(np.asarray(Q_obs, dtype=np.float64))
+    calc_legacy = np.nan_to_num(np.asarray(Q_calc, dtype=np.float64))
+    if (obs_legacy <= 0).any() or (calc_legacy <= 0).any():
+        obs_log_legacy = obs_legacy
+        calc_log_legacy = calc_legacy
+        ref_legacy = np.mean(obs_legacy)
+    else:
+        obs_log_legacy = np.log10(obs_legacy)
+        calc_log_legacy = np.log10(calc_legacy)
+        ref_legacy = np.log10(np.mean(obs_legacy))
+    nse_log_legacy = 1 - (np.sum((calc_log_legacy - obs_log_legacy)**2) / (np.sum((obs_log_legacy - ref_legacy)**2) + eps))
     
     Q_obs_sqrt = np.sqrt(Q_obs)
     Q_calc_sqrt = np.sqrt(Q_calc)
@@ -443,7 +455,7 @@ def calcular_metricas(Q_obs, Q_calc):
     pbias = (np.sum(Q_obs - Q_calc) / (np.sum(Q_obs) + eps)) * 100
     rmse = np.sqrt(np.mean((Q_obs - Q_calc)**2))
     
-    return nse, nse_log, nse_sqrt, pbias, rmse
+    return nse, nse_log, nse_log_legacy, nse_sqrt, pbias, rmse
 
 # ==============================================================================
 # MOTOR ORQUESTRADOR: O BENCHMARK DEFINITIVO DO ARTIGO
@@ -546,19 +558,19 @@ def executar_benchmark_pajeu():
             Q_obs_calib, Q_calc_calib = Q_obs[mask_calib], Q_calc_total[mask_calib]
             Q_obs_valid, Q_calc_valid = Q_obs[mask_valid], Q_calc_total[mask_valid]
 
-            nse_c, nsel_c, nses_c, pbias_c, rmse_c = calcular_metricas(Q_obs_calib, Q_calc_calib)
-            nse_v, nsel_v, nses_v, pbias_v, rmse_v = calcular_metricas(Q_obs_valid, Q_calc_valid)
+            nse_c, nsel_c, nslog_leg_c, nses_c, pbias_c, rmse_c = calcular_metricas(Q_obs_calib, Q_calc_calib)
+            nse_v, nsel_v, nslog_leg_v, nses_v, pbias_v, rmse_v = calcular_metricas(Q_obs_valid, Q_calc_valid)
 
             tabela_estatisticas.append({
                 "ID": calib_id, "Bacia": nome_bacia, "Metodo": metodo,
                 "Ks": round(best_ks_geral, 4), "Kl": round(kl_calc, 4), "Expo": round(best_expo_geral, 4),
-                "NSE_Cal": round(nse_c, 4), "NSE_Log_Cal": round(nsel_c, 4), "NSE_Sqrt_Cal": round(nses_c, 4), "PBIAS_Cal": round(pbias_c, 2), "RMSE_Cal": round(rmse_c, 2),
-                "NSE_Val": round(nse_v, 4), "NSE_Log_Val": round(nsel_v, 4), "NSE_Sqrt_Val": round(nses_v, 4), "PBIAS_Val": round(pbias_v, 2), "RMSE_Val": round(rmse_v, 2)
+                "NSE_Cal": round(nse_c, 4), "NSE_Log_Cal": round(nsel_c, 4), "NSE_Log_Legado_Cal": round(nslog_leg_c, 4), "NSE_Sqrt_Cal": round(nses_c, 4), "PBIAS_Cal": round(pbias_c, 2), "RMSE_Cal": round(rmse_c, 2),
+                "NSE_Val": round(nse_v, 4), "NSE_Log_Val": round(nsel_v, 4), "NSE_Log_Legado_Val": round(nslog_leg_v, 4), "NSE_Sqrt_Val": round(nses_v, 4), "PBIAS_Val": round(pbias_v, 2), "RMSE_Val": round(rmse_v, 2)
             })
 
             print("  [Fase 3] Resumo do bloco:")
-            print(f"    Calibração: NSE={nse_c:.4f} | NSE_Log={nsel_c:.4f} | NSE_Sqrt={nses_c:.4f} | PBIAS={pbias_c:.2f} | RMSE={rmse_c:.2f}")
-            print(f"    Validação : NSE={nse_v:.4f} | NSE_Log={nsel_v:.4f} | NSE_Sqrt={nses_v:.4f} | PBIAS={pbias_v:.2f} | RMSE={rmse_v:.2f}")
+            print(f"    Calibração: NSE={nse_c:.4f} | NSE_Log={nsel_c:.4f} | NSE_Log_Legado={nslog_leg_c:.4f} | NSE_Sqrt={nses_c:.4f} | PBIAS={pbias_c:.2f} | RMSE={rmse_c:.2f}")
+            print(f"    Validação : NSE={nse_v:.4f} | NSE_Log={nsel_v:.4f} | NSE_Log_Legado={nslog_leg_v:.4f} | NSE_Sqrt={nses_v:.4f} | PBIAS={pbias_v:.2f} | RMSE={rmse_v:.2f}")
         finally:
             limpar_memoria_gpu()
 
