@@ -969,11 +969,11 @@ def executar_benchmark_pajeu():
 ]
     
     xp = cp if HAS_GPU else np
-    iteracoes_grid = 50
-    paciencia_grid = 10
+    iteracoes_grid = 20
+    paciencia_grid = 5
     iteracoes_fase2 = 100
     paciencia_fase2 = 10
-    repeticoes_fase1 = 20
+    repeticoes_fase1 = 10
     processos_paralelos_fase1 = 20
     
     tabela_estatisticas = []
