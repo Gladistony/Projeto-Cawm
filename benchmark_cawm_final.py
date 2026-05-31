@@ -424,6 +424,83 @@ def pso_mega_tensor_grid_2000(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param
 
     return xp.asnumpy(Gbest_nash) if HAS_GPU else Gbest_nash
 
+def pso_mega_tensor_grid_repetido(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, hiperparametros, iteracoes, paciencia, repeticoes, processos_paralelos):
+    # Executa várias buscas completas em lotes paralelos na GPU e devolve a média da FO/NSE por combinação.
+    Nc = len(hiperparametros)
+    P_xp, E_xp, Q_obs_xp = xp.asarray(P), xp.asarray(E), xp.asarray(Q_obs)
+
+    soma_fo = xp.zeros(Nc, dtype=xp.float32)
+    soma_nse = xp.zeros(Nc, dtype=xp.float32)
+    total_repeticoes = 0
+
+    for inicio in range(0, repeticoes, processos_paralelos):
+        lote = min(processos_paralelos, repeticoes - inicio)
+
+        W = xp.zeros((lote, Nc, 1, 1), dtype=xp.float32)
+        C1 = xp.zeros((lote, Nc, 1, 1), dtype=xp.float32)
+        C2 = xp.zeros((lote, Nc, 1, 1), dtype=xp.float32)
+
+        for i, hp in enumerate(hiperparametros):
+            W[:, i, 0, 0] = hp['w']
+            C1[:, i, 0, 0] = hp['c1']
+            C2[:, i, 0, 0] = hp['c2']
+
+        X = xp.random.rand(lote, Nc, particulas, 2).astype(xp.float32)
+        X[:, :, :, 0] = X[:, :, :, 0] * 1.0
+        X[:, :, :, 1] = X[:, :, :, 1] * 2.5 + 0.5
+        V = xp.zeros((lote, Nc, particulas, 2), dtype=xp.float32)
+        Pbest = xp.copy(X)
+        Pbest_nash = xp.full((lote, Nc, particulas), -9999.0, dtype=xp.float32)
+        Gbest = xp.zeros((lote, Nc, 2), dtype=xp.float32)
+        Gbest_nash = xp.full((lote, Nc), -9999.0, dtype=xp.float32)
+        Gbest_nse = xp.full((lote, Nc), -9999.0, dtype=xp.float32)
+        it_sem_melhora = xp.zeros((lote, Nc), dtype=int)
+
+        for it in range(iteracoes):
+            X_flat = X.reshape(lote * Nc * particulas, 2)
+            fo_flat, nse_flat = simular_cawm_vetorizado(xp, P_xp, E_xp, Q_obs_xp, mask_calib, area, SUBmax, a_param, X_flat[:, 0], X_flat[:, 1])
+            fo_array = fo_flat.reshape(lote, Nc, particulas)
+            nse_array = nse_flat.reshape(lote, Nc, particulas)
+
+            melhorias = fo_array > Pbest_nash
+            Pbest_nash = xp.where(melhorias, fo_array, Pbest_nash)
+            Pbest = xp.where(melhorias[:, :, :, None], X, Pbest)
+
+            max_n = xp.max(Pbest_nash, axis=2)
+            idx_max = xp.argmax(Pbest_nash, axis=2)
+
+            for l in range(lote):
+                for s in range(Nc):
+                    if max_n[l, s] > Gbest_nash[l, s]:
+                        Gbest_nash[l, s] = max_n[l, s]
+                        Gbest_nse[l, s] = nse_array[l, s, int(idx_max[l, s])]
+                        Gbest[l, s] = Pbest[l, s, int(idx_max[l, s])]
+                        it_sem_melhora[l, s] = 0
+                    else:
+                        it_sem_melhora[l, s] += 1
+
+            melhor_global = float(xp.max(Gbest_nash))
+            print(
+                f"      Grid GPU {inicio + 1:02d}-{inicio + lote:02d}/{repeticoes}: Iteração {it + 1:02d}/{iteracoes} | "
+                f"Combinações: {Nc:02d} | Melhor FO: {melhor_global:8.5f}",
+                end="\r",
+            )
+            if xp.all(it_sem_melhora >= paciencia).item() or it == iteracoes - 1:
+                print()
+                break
+
+            R1, R2 = xp.random.rand(lote, Nc, particulas, 2).astype(xp.float32), xp.random.rand(lote, Nc, particulas, 2).astype(xp.float32)
+            V = (W * V) + (C1 * R1 * (Pbest - X)) + (C2 * R2 * (Gbest[:, :, None, :] - X))
+            X = X + V
+            X[:, :, :, 0] = xp.clip(X[:, :, :, 0], 0.0, 1.0)
+            X[:, :, :, 1] = xp.clip(X[:, :, :, 1], 0.5, 3.0)
+
+        soma_fo = soma_fo + xp.sum(Gbest_nash, axis=0)
+        soma_nse = soma_nse + xp.sum(Gbest_nse, axis=0)
+        total_repeticoes += lote
+
+    return soma_fo / total_repeticoes, soma_nse / total_repeticoes
+
 # ==============================================================================
 # 5. CALCULADORA DE MÉTRICAS ESTATÍSTICAS
 # ==============================================================================
@@ -490,9 +567,12 @@ def executar_benchmark_pajeu():
 ]
     
     xp = cp if HAS_GPU else np
-    iteracoes_grid = 20
+    iteracoes_grid = 50
+    paciencia_grid = 10
     iteracoes_fase2 = 100
     paciencia_fase2 = 10
+    repeticoes_fase1 = 20
+    processos_paralelos_fase1 = 20
     
     tabela_estatisticas = []
     tabela_benchmark = []
@@ -516,15 +596,23 @@ def executar_benchmark_pajeu():
             # FASE 1: GRID SEARCH (Acha melhores parâmetros para 50P e 2000P)
             # -------------------------------------------------------------------
             print("  [Fase 1] Grid Search Rápido na GPU...")
-            nashes_50 = pso_mega_tensor_grid_50(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 50, hiperparametros, iteracoes_grid, paciencia_fase2)
+            print(f"    Repetições: {repeticoes_fase1} | Paralelismo: {processos_paralelos_fase1} | Iterações: {iteracoes_grid} | Paciencia: {paciencia_grid}")
+            nashes_50, nse_50 = pso_mega_tensor_grid_repetido(
+                xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 50, hiperparametros,
+                iteracoes_grid, paciencia_grid, repeticoes_fase1, processos_paralelos_fase1,
+            )
             limpar_memoria_gpu()
-            nashes_2000 = pso_mega_tensor_grid_2000(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 2000, hiperparametros, iteracoes_grid, paciencia_fase2)
+            nashes_2000, nse_2000 = pso_mega_tensor_grid_repetido(
+                xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 2000, hiperparametros,
+                iteracoes_grid, paciencia_grid, repeticoes_fase1, processos_paralelos_fase1,
+            )
 
-            melhor_hp_50 = hiperparametros[np.argmax(nashes_50)]
-            melhor_hp_2000 = hiperparametros[np.argmax(nashes_2000)]
-
-            print(f"    Melhor Combo (50P): w={melhor_hp_50['w']}, c1={melhor_hp_50['c1']}, c2={melhor_hp_50['c2']}")
-            print(f"    Melhor Combo (2000P): w={melhor_hp_2000['w']}, c1={melhor_hp_2000['c1']}, c2={melhor_hp_2000['c2']}")
+            idx_50 = int(xp.argmax(nashes_50))
+            idx_2000 = int(xp.argmax(nashes_2000))
+            melhor_hp_50 = hiperparametros[idx_50]
+            melhor_hp_2000 = hiperparametros[idx_2000]
+            print(f"    Melhor Combo (50P): w={melhor_hp_50['w']}, c1={melhor_hp_50['c1']}, c2={melhor_hp_50['c2']} | FO Médio={float(nashes_50[idx_50]):.5f} | NSE Médio={float(nse_50[idx_50]):.5f}")
+            print(f"    Melhor Combo (2000P): w={melhor_hp_2000['w']}, c1={melhor_hp_2000['c1']}, c2={melhor_hp_2000['c2']} | FO Médio={float(nashes_2000[idx_2000]):.5f} | NSE Médio={float(nse_2000[idx_2000]):.5f}")
 
             # -------------------------------------------------------------------
             # FASE 2: BENCHMARK (Roda 1x Legado, 1x CPU, 1x GPU para comparar Tempo)
