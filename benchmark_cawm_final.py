@@ -1,14 +1,29 @@
 import time
 import gc
+from typing import Any
 import numpy as np
 import pandas as pd
 
+cp: Any = None
 try:
     import cupy as cp
     HAS_GPU = True
 except ImportError:
+    cp = None
     HAS_GPU = False
     print("Aviso: CuPy não encontrado. Rodando em NumPy (Matricial CPU).")
+
+jax: Any = None
+jnp: Any = None
+try:
+    import jax  
+    import jax.numpy as jnp  
+    HAS_JAX = True
+except ImportError:
+    jax = None
+    jnp = None
+    HAS_JAX = False
+    print("Aviso: JAX não encontrado. O método GPU_JAX ficará indisponível.")
 
 from db_init import initialize_db
 from db_models import Bacia, PrecipitationDaily, EvaporationMonthly, FlowDaily, CalibrationPeriod
@@ -465,6 +480,240 @@ def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
         
     return Gbest_nash, Gbest_nse, historico, float(Gbest[0]), float(Gbest[1]), iteracao_convergencia
 
+
+if HAS_JAX:
+    def _simular_cawm_jax_core(P, E, Q_obs, mask_calib, area, SUBmax, a_param, ks_array, expo_array, fo='fo1'):
+        P = jnp.asarray(P, dtype=jnp.float32)
+        E = jnp.asarray(E, dtype=jnp.float32)
+        Q_obs = jnp.asarray(Q_obs, dtype=jnp.float32)
+        mask_calib = jnp.asarray(mask_calib, dtype=bool)
+        ks_array = jnp.asarray(ks_array, dtype=jnp.float32)
+        expo_array = jnp.asarray(expo_array, dtype=jnp.float32)
+
+        b = 1.666666667
+        T_sec = 86400.0
+
+        if area < 6000:
+            k_calha = 0.3745 * (area**-0.489) + 0.0146
+        elif area <= 60000:
+            k_calha = 34.343 * (area**-0.853)
+        else:
+            k_calha = 0.0028
+
+        F_conversao = (area * 1000000.0 / T_sec) / 1000.0
+        mask_float = mask_calib.astype(jnp.float32)
+        qobs_masked = jnp.where(mask_calib, Q_obs, 0.0)
+        soma_qobs_masked = jnp.sum(qobs_masked)
+        soma_qobs2_masked = jnp.sum(qobs_masked * qobs_masked)
+        qobs_sqrt = jnp.sqrt(jnp.maximum(Q_obs, 0.0))
+        qobs_sqrt_masked = jnp.where(mask_calib, qobs_sqrt, 0.0)
+        soma_qobs_sqrt_masked = jnp.sum(qobs_sqrt_masked)
+        soma_qobs_sqrt2_masked = jnp.sum(qobs_sqrt_masked * qobs_sqrt_masked)
+        n_masked = jnp.sum(mask_float)
+
+        def passagem_sem_erro(carry, inputs):
+            ret_corrig, reserv_solo_corrig, S3, soma_C_masked, soma_C_expo_masked = carry
+            P_d, E_d, mask_d = inputs
+
+            evap_inicial = jnp.minimum(ret_corrig + P_d, E_d)
+            ret_corrig = jnp.maximum(ret_corrig + P_d - evap_inicial, 0.0)
+            evap_n_atendida = E_d - evap_inicial
+
+            Pn_pos = jnp.maximum(P_d - evap_inicial, 0.0)
+            hiperb = jnp.tanh(Pn_pos / SUBmax)
+            reserv_solo = jnp.minimum(reserv_solo_corrig, SUBmax)
+            Sub = reserv_solo / SUBmax
+
+            Ps = (SUBmax * (1.0 - Sub**2) * hiperb) / (1.0 + Sub * hiperb + 1e-9)
+            escoamento = P_d - evap_inicial - Ps
+
+            E_comp = (1.0 - jnp.exp(-a_param * (reserv_solo / SUBmax))) * evap_n_atendida
+            RE = jnp.minimum(jnp.minimum(evap_n_atendida, reserv_solo), E_comp)
+            Solo = jnp.maximum(reserv_solo - RE, 0.0)
+            rec_rio = ks_array * Solo
+
+            S1 = jnp.maximum(S3 + escoamento + rec_rio, 0.0)
+            C = jnp.minimum(k_calha * (S1 ** b), S1)
+            S3 = S1 - C
+            reserv_solo_corrig = jnp.maximum(Solo + Ps - rec_rio, 0.0)
+
+            C_expo = C ** expo_array
+            mask_d = mask_d.astype(jnp.float32)
+            soma_C_masked = soma_C_masked + (mask_d * C)
+            soma_C_expo_masked = soma_C_expo_masked + (mask_d * C_expo)
+
+            return (ret_corrig, reserv_solo_corrig, S3, soma_C_masked, soma_C_expo_masked), None
+
+        carry_inicial = (
+            jnp.zeros_like(ks_array),
+            jnp.zeros_like(ks_array),
+            jnp.zeros_like(ks_array),
+            jnp.zeros_like(ks_array),
+            jnp.zeros_like(ks_array),
+        )
+        (_, _, _, soma_C_masked, soma_C_expo_masked), _ = jax.lax.scan(
+            passagem_sem_erro,
+            carry_inicial,
+            (P, E, mask_calib),
+        )
+
+        vol_obs_mm = jnp.sum(qobs_masked) / F_conversao
+        kl_array = jnp.maximum((soma_C_masked - vol_obs_mm) / (soma_C_expo_masked + 1e-9), 0.0)
+
+        def passagem_com_erro(carry, inputs):
+            ret_corrig, reserv_solo_corrig, S3, soma_C_masked, soma_C_expo_masked, numerador_nash, soma_qcalc_masked, sum_qcalc, sum_qcalc2, sum_qcalc_qobs, sum_sqrtqcalc_sqrtqobs = carry
+            P_d, E_d, mask_d, Q_obs_d = inputs
+
+            evap_inicial = jnp.minimum(ret_corrig + P_d, E_d)
+            ret_corrig = jnp.maximum(ret_corrig + P_d - evap_inicial, 0.0)
+            evap_n_atendida = E_d - evap_inicial
+
+            Pn_pos = jnp.maximum(P_d - evap_inicial, 0.0)
+            hiperb = jnp.tanh(Pn_pos / SUBmax)
+            reserv_solo = jnp.minimum(reserv_solo_corrig, SUBmax)
+            Sub = reserv_solo / SUBmax
+
+            Ps = (SUBmax * (1.0 - Sub**2) * hiperb) / (1.0 + Sub * hiperb + 1e-9)
+            escoamento = P_d - evap_inicial - Ps
+
+            E_comp = (1.0 - jnp.exp(-a_param * (reserv_solo / SUBmax))) * evap_n_atendida
+            RE = jnp.minimum(jnp.minimum(evap_n_atendida, reserv_solo), E_comp)
+            Solo = jnp.maximum(reserv_solo - RE, 0.0)
+            rec_rio = ks_array * Solo
+
+            S1 = jnp.maximum(S3 + escoamento + rec_rio, 0.0)
+            C = jnp.minimum(k_calha * (S1 ** b), S1)
+            S3 = S1 - C
+            reserv_solo_corrig = jnp.maximum(Solo + Ps - rec_rio, 0.0)
+
+            C_expo = C ** expo_array
+            Q_calc_d = (C - jnp.minimum(kl_array * C_expo, C)) * F_conversao
+            mask_d = mask_d.astype(jnp.float32)
+
+            soma_C_masked = soma_C_masked + (mask_d * C)
+            soma_C_expo_masked = soma_C_expo_masked + (mask_d * C_expo)
+            soma_qcalc_masked = soma_qcalc_masked + (mask_d * Q_calc_d)
+            sum_qcalc = sum_qcalc + (mask_d * Q_calc_d)
+            sum_qcalc2 = sum_qcalc2 + (mask_d * Q_calc_d * Q_calc_d)
+            sum_qcalc_qobs = sum_qcalc_qobs + (mask_d * Q_calc_d * Q_obs_d)
+            sum_sqrtqcalc_sqrtqobs = sum_sqrtqcalc_sqrtqobs + (mask_d * jnp.sqrt(jnp.maximum(Q_calc_d, 0.0)) * jnp.sqrt(jnp.maximum(Q_obs_d, 0.0)))
+            erro_d = Q_obs_d - Q_calc_d
+            numerador_nash = numerador_nash + (mask_d * erro_d * erro_d)
+
+            return (ret_corrig, reserv_solo_corrig, S3, soma_C_masked, soma_C_expo_masked, numerador_nash, soma_qcalc_masked, sum_qcalc, sum_qcalc2, sum_qcalc_qobs, sum_sqrtqcalc_sqrtqobs), None
+
+        carry_inicial = (
+            jnp.zeros_like(ks_array),
+            jnp.zeros_like(ks_array),
+            jnp.zeros_like(ks_array),
+            jnp.zeros_like(ks_array),
+            jnp.zeros_like(ks_array),
+            jnp.zeros_like(ks_array),
+            jnp.zeros_like(ks_array),
+            jnp.zeros_like(ks_array),
+            jnp.zeros_like(ks_array),
+            jnp.zeros_like(ks_array),
+            jnp.zeros_like(ks_array),
+        )
+        (_, _, _, _, _, numerador_nash, soma_qcalc_masked, sum_qcalc, sum_qcalc2, sum_qcalc_qobs, sum_sqrtqcalc_sqrtqobs), _ = jax.lax.scan(
+            passagem_com_erro,
+            carry_inicial,
+            (P, E, mask_calib, Q_obs),
+        )
+
+        n_masked = jnp.maximum(n_masked, 1.0)
+        denominador_nash = (soma_qobs2_masked - (soma_qobs_masked * soma_qobs_masked) / n_masked) + 1e-9
+        nash_array = 1.0 - (numerador_nash / denominador_nash)
+
+        if fo in ('fo1', 'default'):
+            fo_array = calcular_fo(jnp, nash_array, soma_qcalc_masked, soma_qobs_masked)
+        elif fo in ('fo2', 'composite'):
+            numerador_nse = sum_qcalc2 - (2.0 * sum_qcalc_qobs) + soma_qobs2_masked
+            nse = 1.0 - (numerador_nse / denominador_nash)
+
+            numerador_sqrt = sum_qcalc - (2.0 * sum_sqrtqcalc_sqrtqobs) + soma_qobs_sqrt_masked
+            denominador_sqrt = (soma_qobs_sqrt2_masked - (soma_qobs_sqrt_masked * soma_qobs_sqrt_masked) / n_masked) + 1e-9
+            nse_sqrt = 1.0 - (numerador_sqrt / denominador_sqrt)
+            fo_array = (nse * 0.5) + (nse_sqrt * 0.5)
+        elif fo in ('kge', 'fo_kge'):
+            media_obs = soma_qobs_masked / n_masked
+            media_sim = sum_qcalc / n_masked
+            var_sim = (sum_qcalc2 / n_masked) - (media_sim ** 2)
+            var_obs = (soma_qobs2_masked / n_masked) - (media_obs ** 2)
+            std_sim = jnp.sqrt(jnp.maximum(var_sim, 1e-12))
+            std_obs = jnp.sqrt(jnp.maximum(var_obs, 1e-12)) + 1e-9
+            cov = (sum_qcalc_qobs / n_masked) - (media_sim * media_obs)
+            r = cov / (std_sim * std_obs + 1e-9)
+            alpha = std_sim / (std_obs + 1e-9)
+            beta = (sum_qcalc / n_masked) / (media_obs + 1e-9)
+            fo_array = 1.0 - jnp.sqrt((r - 1.0)**2 + (alpha - 1.0)**2 + (beta - 1.0)**2)
+        else:
+            fo_array = calcular_fo(jnp, nash_array, soma_qcalc_masked, soma_qobs_masked)
+
+        return fo_array, nash_array
+
+    simular_cawm_jax = jax.jit(
+        _simular_cawm_jax_core,
+        static_argnames=('area', 'SUBmax', 'a_param', 'fo'),
+    )
+else:
+    def simular_cawm_jax(*args, **kwargs):
+        raise ImportError("JAX não está disponível. Instale JAX para usar GPU_JAX.")
+
+
+def pso_vetorizado_jax(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, iteracoes, paciencia, w, c1, c2, fo='fo1'):
+    if not HAS_JAX:
+        raise ImportError("JAX não está disponível. Instale JAX para usar GPU_JAX.")
+
+    key = jax.random.PRNGKey(int(time.time() * 1e6) % (2**31 - 1))
+    X = jax.random.uniform(key, (particulas, 2), dtype=jnp.float32)
+    X = X.at[:, 0].set(X[:, 0] * 1.0)
+    X = X.at[:, 1].set(X[:, 1] * 2.5 + 0.5)
+    V = jnp.zeros((particulas, 2), dtype=jnp.float32)
+    Pbest = jnp.array(X)
+    Pbest_nash = jnp.full(particulas, -9999.0, dtype=jnp.float32)
+    Gbest = jnp.zeros(2, dtype=jnp.float32)
+    Gbest_nash = -9999.0
+    Gbest_nse = -9999.0
+    it_sem_melhora = 0
+    historico = []
+    iteracao_convergencia = 0
+
+    for it in range(iteracoes):
+        fo_array, nse_array = simular_cawm_jax(P, E, Q_obs, mask_calib, area=area, SUBmax=SUBmax, a_param=a_param, ks_array=X[:, 0], expo_array=X[:, 1], fo=fo)
+        nash_array = jnp.round(fo_array, 3)
+        nse_array = jnp.round(nse_array, 3)
+        melhorias = nash_array > Pbest_nash
+        Pbest_nash = jnp.where(melhorias, nash_array, Pbest_nash)
+        Pbest = jnp.where(melhorias[:, None], X, Pbest)
+        idx_max = int(jnp.argmax(Pbest_nash))
+        max_nash = float(Pbest_nash[idx_max])
+
+        if max_nash > Gbest_nash:
+            Gbest_nash = max_nash
+            Gbest_nse = float(nse_array[idx_max])
+            Gbest = jnp.array(Pbest[idx_max])
+            it_sem_melhora = 0
+            iteracao_convergencia = it + 1
+        else:
+            it_sem_melhora += 1
+
+        historico.append(Gbest_nash)
+        print(f"      Fase 2 [GPU_JAX]: Iteração [{it+1:02d}/{iteracoes}] | FO: {Gbest_nash:8.3f} | NSE: {Gbest_nse:8.3f}      ", end="\r")
+        if it_sem_melhora >= paciencia or it == iteracoes - 1:
+            print()
+            break
+
+        key, r1_key, r2_key = jax.random.split(key, 3)
+        R1 = jax.random.uniform(r1_key, (particulas, 2), dtype=jnp.float32)
+        R2 = jax.random.uniform(r2_key, (particulas, 2), dtype=jnp.float32)
+        V = (w * V) + (c1 * R1 * (Pbest - X)) + (c2 * R2 * (Gbest - X))
+        X = X + V
+        X = X.at[:, 0].set(jnp.clip(X[:, 0], 0.0, 1.0))
+        X = X.at[:, 1].set(jnp.clip(X[:, 1], 0.5, 3.0))
+
+    return Gbest_nash, Gbest_nse, historico, float(np.asarray(Gbest[0])), float(np.asarray(Gbest[1])), iteracao_convergencia
+
 def pso_mega_tensor_grid_50(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particulas, hiperparametros, iteracoes, paciencia, fo='fo1'):
     # Executa a busca na GPU com 50 partículas simultaneamente para todas as 12 combinações (Apenas 1 rodada)
     Nc = len(hiperparametros)
@@ -720,7 +969,6 @@ def executar_benchmark_pajeu():
 ]
     
     xp = cp if HAS_GPU else np
-    xp_fase1 = np
     iteracoes_grid = 50
     paciencia_grid = 10
     iteracoes_fase2 = 100
@@ -749,20 +997,21 @@ def executar_benchmark_pajeu():
             # -------------------------------------------------------------------
             # FASE 1: GRID SEARCH (Acha melhores parâmetros para 50P e 2000P)
             # -------------------------------------------------------------------
-            print("  [Fase 1] Grid Search Rápido na CPU vetorizada...")
+            print("  [Fase 1] Grid Search Rápido na GPU...")
             print(f"    Repetições: {repeticoes_fase1} | Paralelismo: {processos_paralelos_fase1} | Iterações: {iteracoes_grid} | Paciencia: {paciencia_grid}")
             t_calib_inicio = time.perf_counter()
             nashes_50, nse_50 = pso_mega_tensor_grid_repetido(
-                xp_fase1, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 50, hiperparametros,
+                xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 50, hiperparametros,
                 iteracoes_grid, paciencia_grid, repeticoes_fase1, processos_paralelos_fase1, fo=FO_SELECTION,
             )
+            limpar_memoria_gpu()
             nashes_2000, nse_2000 = pso_mega_tensor_grid_repetido(
-                xp_fase1, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 2000, hiperparametros,
+                xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 2000, hiperparametros,
                 iteracoes_grid, paciencia_grid, repeticoes_fase1, processos_paralelos_fase1, fo=FO_SELECTION,
             )
 
-            idx_50 = int(np.argmax(nashes_50))
-            idx_2000 = int(np.argmax(nashes_2000))
+            idx_50 = int(xp.argmax(nashes_50))
+            idx_2000 = int(xp.argmax(nashes_2000))
             melhor_hp_50 = hiperparametros[idx_50]
             melhor_hp_2000 = hiperparametros[idx_2000]
             tempo_calibracao_pso = time.perf_counter() - t_calib_inicio
@@ -782,6 +1031,9 @@ def executar_benchmark_pajeu():
                 ("Matricial GPU", pso_vetorizado, xp, 2000, melhor_hp_2000)
             ]
 
+            if HAS_JAX:
+                configuracoes.append(("GPU_JAX", pso_vetorizado_jax, None, 2000, melhor_hp_2000))
+
             best_ks_geral, best_expo_geral = 0.0, 0.0
 
             for nome_metodo, funcao_pso, xp_backend, part, params in configuracoes:
@@ -791,7 +1043,10 @@ def executar_benchmark_pajeu():
 
                 t_inicio = time.perf_counter()
                 if xp_backend is None:
-                    nash_final, nse_final, historico, ks_f, expo_f, iteracao_conv = funcao_pso(P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes_fase2, paciencia_fase2, w_opt, c1_opt, c2_opt, fo=FO_SELECTION)
+                    if nome_metodo == "GPU_JAX":
+                        nash_final, nse_final, historico, ks_f, expo_f, iteracao_conv = funcao_pso(P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes_fase2, paciencia_fase2, w_opt, c1_opt, c2_opt, fo=FO_SELECTION)
+                    else:
+                        nash_final, nse_final, historico, ks_f, expo_f, iteracao_conv = funcao_pso(P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes_fase2, paciencia_fase2, w_opt, c1_opt, c2_opt, fo=FO_SELECTION)
                 else:
                     nash_final, nse_final, historico, ks_f, expo_f, iteracao_conv = funcao_pso(xp_backend, P, E, Q_obs, mask_calib, area, SUBmax, a_param, part, iteracoes_fase2, paciencia_fase2, w_opt, c1_opt, c2_opt, fo=FO_SELECTION)
                     if xp_backend == cp: cp.cuda.Stream.null.synchronize()
