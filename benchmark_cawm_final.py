@@ -428,7 +428,7 @@ def pso_mega_tensor_grid_2000(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param
 # 5. CALCULADORA DE MÉTRICAS ESTATÍSTICAS
 # ==============================================================================
 def calcular_metricas(Q_obs, Q_calc):
-    eps = 1e-6 
+    eps = 0.01#1e-6 
     den_nse = np.sum((Q_obs - np.mean(Q_obs))**2) + eps
     nse = 1 - (np.sum((Q_obs - Q_calc)**2) / den_nse)
     
@@ -438,16 +438,15 @@ def calcular_metricas(Q_obs, Q_calc):
 
     obs_legacy = np.nan_to_num(np.asarray(Q_obs, dtype=np.float64))
     calc_legacy = np.nan_to_num(np.asarray(Q_calc, dtype=np.float64))
+    obs_media = np.mean(obs_legacy)
     if (obs_legacy <= 0).any() or (calc_legacy <= 0).any():
-        obs_log_legacy = obs_legacy
-        calc_log_legacy = calc_legacy
-        ref_legacy = np.mean(obs_legacy)
+        sim_log = obs_legacy
+        obs_log = calc_legacy
     else:
-        obs_log_legacy = np.log10(obs_legacy)
-        calc_log_legacy = np.log10(calc_legacy)
-        ref_legacy = np.log10(np.mean(obs_legacy))
-    nse_log_legacy = 1 - (np.sum((calc_log_legacy - obs_log_legacy)**2) / (np.sum((obs_log_legacy - ref_legacy)**2) + eps))
-    
+        sim_log = np.log10(obs_legacy)
+        obs_log = np.log10(calc_legacy)
+    nse_log_legacy = 1 - (np.sum((sim_log - obs_log)**2) / (np.sum((obs_log - obs_media)**2)))
+
     Q_obs_sqrt = np.sqrt(Q_obs)
     Q_calc_sqrt = np.sqrt(Q_calc)
     nse_sqrt = 1 - (np.sum((Q_obs_sqrt - Q_calc_sqrt)**2) / (np.sum((Q_obs_sqrt - np.mean(Q_obs_sqrt))**2) + eps))
@@ -465,13 +464,30 @@ def executar_benchmark_pajeu():
     ids_alvo = [25, 27, 29, 31, 33]
     
     hiperparametros = [
-        {"w": 0.4, "c1": 1.0, "c2": 2.0}, {"w": 0.5, "c1": 1.5, "c2": 1.5},
-        {"w": 0.6, "c1": 2.0, "c2": 1.0}, {"w": 0.7, "c1": 1.5, "c2": 2.0},
-        {"w": 0.8, "c1": 2.0, "c2": 2.0}, {"w": 0.9, "c1": 1.0, "c2": 1.0},
-        {"w": 0.9, "c1": 0.5, "c2": 2.5}, {"w": 0.7, "c1": 2.5, "c2": 0.5},
-        {"w": 0.5, "c1": 2.0, "c2": 2.0}, {"w": 0.8, "c1": 1.5, "c2": 1.5},
-        {"w": 0.6, "c1": 1.0, "c2": 1.0}, {"w": 0.4, "c1": 2.0, "c2": 1.5}
-    ]
+    # --- GRUPO 1: PONTOS DE CONVERGÊNCIA TEÓRICA (OS MAIS USADOS) ---
+    {"w": 0.7298, "c1": 1.49618, "c2": 1.49618},  # 1. Fator de Constrição de Clerc (O melhor e mais famoso)
+    {"w": 0.6000, "c1": 1.70000, "c2": 1.70000},  # 2. Configuração popular de estabilidade estática
+    {"w": 0.7000, "c1": 2.00000, "c2": 2.00000},  # 3. Padrão clássico (Soma c1+c2 = 4 com inércia moderada)
+
+    # --- GRUPO 2: EQUILÍBRIO COMPORTAMENTAL (STANDARD) ---
+    {"w": 0.5000, "c1": 1.50000, "c2": 1.50000},  # 4. Equilíbrio perfeito de forças (Média inércia)
+    {"w": 0.8000, "c1": 1.50000, "c2": 1.50000},  # 5. Equilíbrio perfeito (Alta inércia para evitar mínimos locais)
+    {"w": 0.4000, "c1": 2.00000, "c2": 2.00000},  # 6. Foco em convergência rápida e ajuste fino local
+
+    # --- GRUPO 3: FOCO COGNITIVO / INDIVIDUAL (EXPLORAÇÃO) ---
+    {"w": 0.6000, "c1": 2.00000, "c2": 1.00000},  # 7. Alta busca individual, evita seguir o grupo cegamente
+    {"w": 0.7000, "c1": 2.50000, "c2": 0.50000},  # 8. Extremo cognitivo (Ótimo para funções multimodais complexas)
+    {"w": 0.8000, "c1": 2.00000, "c2": 1.00000},  # 9. Alta inércia com viés de auto-aprendizado
+
+    # --- GRUPO 4: FOCO SOCIAL / COLETIVO (CONVERGÊNCIA) ---
+    {"w": 0.6000, "c1": 1.00000, "c2": 2.00000},  # 10. Alta atração pelo melhor global (Convergência rápida)
+    {"w": 0.4000, "c1": 1.00000, "c2": 2.50000},  # 11. Extremo social com baixa inércia (Busca agressiva)
+    {"w": 0.7000, "c1": 1.00000, "c2": 2.00000},   # 12. Atração social com maior capacidade de escape
+    # --- GRUPO 5: CONFIGURAÇÃO USADA ORIGINALMENTE NO ARTIGO (APENAS PARA COMPARAÇÃO) ---
+    {"w": 0.8000, "c1": 1.00000, "c2": 2.00000},
+    {"w": 0.9000, "c1": 1.20000, "c2": 1.20000},  # 14. Alta Exploração Hidrológica (Evita convergência prematura em bacias complexas)
+    {"w": 0.7298, "c1": 2.04700, "c2": 2.04700}   # 15. Parametrização Alternativa de Clerc & Kennedy (Alta aceleração controlada)  
+]
     
     xp = cp if HAS_GPU else np
     iteracoes_grid = 20
