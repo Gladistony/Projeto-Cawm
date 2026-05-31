@@ -1,8 +1,12 @@
 import time
 import gc
+import re
 from typing import Any
+from pathlib import Path
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 cp: Any = None
 try:
@@ -31,6 +35,114 @@ from db_models import Bacia, PrecipitationDaily, EvaporationMonthly, FlowDaily, 
 # Constante para seleção da Função Objetivo (FO)
 # Opções suportadas: 'fo1' (padrão), 'fo2'/'composite' (NSE + NSE_sqrt), 'kge'/'fo_kge'
 FO_SELECTION = 'fo1'
+
+BASE_DIR = Path(__file__).resolve().parent
+PASTA_DADOS_BACIA = BASE_DIR / 'dados_bacia_x'
+
+
+def criar_pasta_resultado() -> Path:
+    PASTA_DADOS_BACIA.mkdir(parents=True, exist_ok=True)
+
+    maior_indice = 0
+    for item in PASTA_DADOS_BACIA.iterdir():
+        if not item.is_dir():
+            continue
+        match = re.fullmatch(r'resultado_(\d+)', item.name)
+        if match:
+            maior_indice = max(maior_indice, int(match.group(1)))
+
+    pasta_resultado = PASTA_DADOS_BACIA / f'resultado_{maior_indice + 1}'
+    pasta_resultado.mkdir(parents=True, exist_ok=False)
+    return pasta_resultado
+
+
+def salvar_csv_em_dois_locais(df: pd.DataFrame, nome_arquivo: str, pasta_resultado: Path) -> None:
+    caminho_resultado = pasta_resultado / nome_arquivo
+    caminho_raiz = BASE_DIR / nome_arquivo
+    df.to_csv(caminho_resultado, index=False)
+    df.to_csv(caminho_raiz, index=False)
+
+
+def normalizar_nome_arquivo(texto: str) -> str:
+    texto = texto.strip().lower()
+    texto = re.sub(r'[^a-z0-9]+', '_', texto)
+    return texto.strip('_')
+
+
+def salvar_grafico_convergencia_bacia(df_convergencia: pd.DataFrame, bacia: str, calib_id: int, pasta_resultado: Path) -> None:
+    df_bacia = df_convergencia[df_convergencia['ID'] == calib_id].copy()
+    if df_bacia.empty:
+        return
+
+    plt.figure(figsize=(10, 6))
+    for metodo, grupo in df_bacia.groupby('Método'):
+        grupo = grupo.sort_values('Iteração')
+        plt.plot(grupo['Iteração'], grupo['NSE'], marker='o', linewidth=2, label=metodo)
+
+    plt.title(f'Convergência por método - {bacia}')
+    plt.xlabel('Iteração')
+    plt.ylabel('NSE / FO')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+
+    nome_arquivo = f'Grafico_convergencia_{normalizar_nome_arquivo(bacia)}.png'
+    plt.savefig(pasta_resultado / nome_arquivo, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
+def salvar_grafico_tempo_benchmark(df_benchmark: pd.DataFrame, pasta_resultado: Path) -> None:
+    if df_benchmark.empty:
+        return
+
+    df_plot = df_benchmark[['Bacia', 'Método', 'Tempo(s)']].copy()
+    pivot = df_plot.pivot_table(index='Bacia', columns='Método', values='Tempo(s)', aggfunc='mean')
+    ax = pivot.plot(kind='bar', figsize=(12, 6), width=0.85)
+    ax.set_title('Comparativo de tempo de execução por bacia e método')
+    ax.set_xlabel('Bacia')
+    ax.set_ylabel('Tempo (s)')
+    ax.grid(axis='y', alpha=0.3)
+    plt.xticks(rotation=30, ha='right')
+    plt.tight_layout()
+    plt.savefig(pasta_resultado / 'Grafico_tempos_benchmark.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+
+def salvar_pdf_hidrograma_bacia(
+    df_series: pd.DataFrame,
+    nome_bacia: str,
+    intervalo_calib: tuple[int, int],
+    intervalo_valid: tuple[int, int],
+    pasta_resultado: Path,
+) -> None:
+    def plotar_intervalo(ax, ax2, inicio: int, fim: int, titulo: str) -> None:
+        sub = df_series.loc[(df_series.index >= inicio) & (df_series.index <= fim), ["vazao", "vazao_calc", "chuva_media"]].copy()
+        chuva2 = -1 * sub["chuva_media"]
+
+        lns1 = ax.plot(sub.index, sub["vazao"], label="Qobs m³/s", color="red")
+        lns2 = ax.plot(sub.index, sub["vazao_calc"], label="Qcalc m³/s", color="blue")
+        lns3 = ax2.plot(sub.index, chuva2, label="chuva", color="green")
+        lns = lns1 + lns2 + lns3
+        labs = [l.get_label() for l in lns]
+        ax.legend(lns, labs, loc=0)
+        ax2.set_yticks(np.arange(-1000, 0, 100))
+        ax.set_yticks(np.arange(0, max(900, float(sub["vazao"].max() or 0) + 100), 100))
+        ax.set_xticks(np.arange(inicio, fim + 1, max(1, (fim - inicio) // 8 or 1)))
+        ax.set_xlabel('Dias corridos')
+        ax.set_ylabel('Vazao')
+        ax2.set_ylabel('Chuva')
+        ax.set_title(titulo)
+
+    caminho_pdf = pasta_resultado / f'Graficos_hidrograma_{normalizar_nome_arquivo(nome_bacia)}.pdf'
+    with PdfPages(caminho_pdf) as pp:
+        for etiqueta, intervalo in (('calibracao', intervalo_calib), ('validacao', intervalo_valid)):
+            inicio, fim = intervalo
+            fig = plt.figure(figsize=(11, 5))
+            ax = fig.add_subplot(111)
+            ax2 = ax.twinx()
+            plotar_intervalo(ax, ax2, inicio, fim, f'CAWM: {nome_bacia} - {etiqueta} ({inicio} a {fim})')
+            pp.savefig(fig, bbox_inches='tight')
+            plt.close(fig)
 
 
 def limpar_memoria_gpu():
@@ -979,6 +1091,8 @@ def executar_benchmark_pajeu():
     tabela_estatisticas = []
     tabela_benchmark = []
     dados_convergencia = []
+    nome_bacia_por_id = {}
+    pasta_resultado = criar_pasta_resultado()
 
     print("\n" + "="*90)
     print(" BENCHMARK E VALIDAÇÃO ESTATÍSTICA: BACIA DO PAJEÚ (PE)")
@@ -993,6 +1107,7 @@ def executar_benchmark_pajeu():
             continue
         try:
             print(f"  Bacia: {nome_bacia} | Método: {metodo} | Calibração: {mask_calib.sum()} dias")
+            nome_bacia_por_id[calib_id] = nome_bacia
 
             # -------------------------------------------------------------------
             # FASE 1: GRID SEARCH (Acha melhores parâmetros para 50P e 2000P)
@@ -1072,6 +1187,21 @@ def executar_benchmark_pajeu():
             # -------------------------------------------------------------------
             print("  [Fase 3] Validando série e calculando métricas...")
             Q_calc_total, kl_calc = simular_forward_determinista(P, E, Q_obs, mask_calib, area, SUBmax, a_param, best_ks_geral, best_expo_geral)
+            df_series = pd.DataFrame({
+                'vazao': Q_obs,
+                'vazao_calc': Q_calc_total,
+                'chuva_media': P,
+            })
+            idx_calib = np.where(mask_calib)[0]
+            idx_valid = np.where(mask_valid)[0]
+            if len(idx_calib) > 0 and len(idx_valid) > 0:
+                salvar_pdf_hidrograma_bacia(
+                    df_series,
+                    nome_bacia,
+                    (int(idx_calib[0]), int(idx_calib[-1])),
+                    (int(idx_valid[0]), int(idx_valid[-1])),
+                    pasta_resultado,
+                )
 
             Q_obs_calib, Q_calc_calib = Q_obs[mask_calib], Q_calc_total[mask_calib]
             Q_obs_valid, Q_calc_valid = Q_obs[mask_valid], Q_calc_total[mask_valid]
@@ -1095,16 +1225,21 @@ def executar_benchmark_pajeu():
     # ==========================================================
     # GERAÇÃO DOS CSVs FINAIS
     # ==========================================================
-    pd.DataFrame(tabela_benchmark).to_csv("benchmark_tempos_pajeu.csv", index=False)
-    pd.DataFrame(dados_convergencia).to_csv("benchmark_convergencia_pajeu.csv", index=False)
+    salvar_csv_em_dois_locais(pd.DataFrame(tabela_benchmark), 'benchmark_tempos_pajeu.csv', pasta_resultado)
+    salvar_csv_em_dois_locais(pd.DataFrame(dados_convergencia), 'benchmark_convergencia_pajeu.csv', pasta_resultado)
+    df_benchmark = pd.DataFrame(tabela_benchmark)
+    df_convergencia = pd.DataFrame(dados_convergencia)
+    for calib_id, nome_bacia in nome_bacia_por_id.items():
+        salvar_grafico_convergencia_bacia(df_convergencia, nome_bacia, calib_id, pasta_resultado)
+    salvar_grafico_tempo_benchmark(df_benchmark, pasta_resultado)
     
     df_estat = pd.DataFrame(tabela_estatisticas)
     print("\n" + "="*120)
     print(" TABELA DE DADOS FINAIS - ESTATÍSTICAS DA PROFESSORA")
     print("="*120)
     print(df_estat.to_string(index=False))
-    df_estat.to_csv("tabela_pajeu_estatisticas.csv", index=False)
-    print("\n[SUCESSO] 3 CSVs gerados (Tempos, Convergência e Tabela Estatística)!")
+    salvar_csv_em_dois_locais(df_estat, 'tabela_pajeu_estatisticas.csv', pasta_resultado)
+    print(f"\n[SUCESSO] 3 CSVs gerados em {pasta_resultado} e copiados para a raiz do projeto!")
 
 if __name__ == "__main__":
     executar_benchmark_pajeu()

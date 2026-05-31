@@ -1,0 +1,259 @@
+==========================================================================================
+
+ BENCHMARK E VALIDAÇÃO ESTATÍSTICA: BACIA DO PAJEÚ (PE)
+
+==========================================================================================
+
+
+
+▶ INICIANDO CALIBRATION_ID: 25
+
+  Bacia: AFOGADOS | Método: normal | Calibração: 2339 dias
+
+  [Fase 1] Grid Search Rápido na GPU...
+
+    Repetições: 10 | Paralelismo: 20 | Iterações: 20 | Paciencia: 5
+
+      Grid GPU 01-10/10: Iteração 20/20 | Combinações: 15 | Melhor FO: 495776732020736.00000
+
+      Grid GPU 01-10/10: Iteração 20/20 | Combinações: 15 | Melhor FO: 499076105764864.00000
+
+    Melhor Combo (50P): w=0.7298, c1=2.047, c2=2.047 | FO Médio=422090930913280.00000 | NSE Médio=0.42209
+
+    Melhor Combo (2000P): w=0.5, c1=1.5, c2=1.5 | FO Médio=497563035762688.00000 | NSE Médio=0.49756
+
+    Tempo total de calibração dos parâmetros do PSO: 179.38s
+
+  [Fase 2] Benchmark Comparativo (1 rodada cada)...
+
+      Fase 2 [Legado]: Iteração [71/100] | FO: 531807166.702 | NSE:    0.492
+
+    -> Escalar (Legado): Tempo = 658.41s | FO Final = 531807166.7020 | NSE Final = 0.4920
+
+      Fase 2 [Matricial]: Iteração [48/100] | FO: 498670231355392.000 | NSE:    0.499
+
+    -> Matricial CPU: Tempo = 22.39s | FO Final = 498670231355392.0000 | NSE Final = 0.4990
+
+      Fase 2 [Matricial]: Iteração [41/100] | FO: 498531349561344.000 | NSE:    0.499
+
+    -> Matricial GPU: Tempo = 107.17s | FO Final = 498531349561344.0000 | NSE Final = 0.4990
+
+      Fase 2 [GPU_JAX]: Iteração [53/100] | FO: 499021512704000.000 | NSE:    0.499
+
+    -> GPU_JAX: Tempo = 3.74s | FO Final = 499021512704000.0000 | NSE Final = 0.4990
+
+  [Fase 3] Validando série e calculando métricas...
+
+  [Fase 3] Resumo do bloco:
+
+    Calibração: NSE=0.4985 | NSE_Log=-0.3799 | NSE_Log_Legado=-0.1989 | NSE_Sqrt=0.3407 | PBIAS=-0.00 | RMSE=31.28
+
+    Validação : NSE=0.2498 | NSE_Log=-0.2275 | NSE_Log_Legado=0.3999 | NSE_Sqrt=0.1756 | PBIAS=-36.91 | RMSE=42.04
+
+
+
+▶ INICIANDO CALIBRATION_ID: 27
+
+  Bacia: FLORES | Método: r | Calibração: 885 dias
+
+  [Fase 1] Grid Search Rápido na GPU...
+
+    Repetições: 10 | Paralelismo: 20 | Iterações: 20 | Paciencia: 5
+
+      Grid GPU 01-10/10: Iteração 20/20 | Combinações: 15 | Melhor FO: 656476154626048.00000
+
+      Grid GPU 01-10/10: Iteração 20/20 | Combinações: 15 | Melhor FO: 656476691496960.00000
+
+    Melhor Combo (50P): w=0.4, c1=2.0, c2=2.0 | FO Médio=634170711736320.00000 | NSE Médio=0.63417
+
+    Melhor Combo (2000P): w=0.4, c1=1.0, c2=2.5 | FO Médio=656476221734912.00000 | NSE Médio=0.65648
+
+    Tempo total de calibração dos parâmetros do PSO: 567.62s
+
+  [Fase 2] Benchmark Comparativo (1 rodada cada)...
+
+      Fase 2 [Legado]: Iteração [67/100] | FO: 616516644.122 | NSE:    0.656
+
+    -> Escalar (Legado): Tempo = 2037.75s | FO Final = 616516644.1220 | NSE Final = 0.6560
+
+      Fase 2 [Matricial]: Iteração [37/100] | FO: 656476758605824.000 | NSE:    0.656
+
+    -> Matricial CPU: Tempo = 58.97s | FO Final = 656476758605824.0000 | NSE Final = 0.6560
+
+      Fase 2 [Matricial]: Iteração [46/100] | FO: 656476892823552.000 | NSE:    0.656
+
+    -> Matricial GPU: Tempo = 393.56s | FO Final = 656476892823552.0000 | NSE Final = 0.6560
+
+      Fase 2 [GPU_JAX]: Iteração [35/100] | FO: 656476892823552.000 | NSE:    0.656
+
+    -> GPU_JAX: Tempo = 4.27s | FO Final = 656476892823552.0000 | NSE Final = 0.6560
+
+  [Fase 3] Validando série e calculando métricas...
+
+  [Fase 3] Resumo do bloco:
+
+    Calibração: NSE=0.6565 | NSE_Log=-0.4141 | NSE_Log_Legado=0.5007 | NSE_Sqrt=0.7691 | PBIAS=-0.00 | RMSE=37.82
+
+    Validação : NSE=0.7836 | NSE_Log=-0.2085 | NSE_Log_Legado=0.7541 | NSE_Sqrt=0.7794 | PBIAS=-3.41 | RMSE=26.76
+
+
+
+▶ INICIANDO CALIBRATION_ID: 29
+
+  Bacia: FLORESTA | Método: r | Calibração: 901 dias
+
+  [Fase 1] Grid Search Rápido na GPU...
+
+    Repetições: 10 | Paralelismo: 20 | Iterações: 20 | Paciencia: 5
+
+      Grid GPU 01-10/10: Iteração 20/20 | Combinações: 15 | Melhor FO: 605895130087424.00000
+
+      Grid GPU 01-10/10: Iteração 20/20 | Combinações: 15 | Melhor FO: 605921034108928.00000
+
+    Melhor Combo (50P): w=0.4, c1=2.0, c2=2.0 | FO Médio=596174746681344.00000 | NSE Médio=0.59617
+
+    Melhor Combo (2000P): w=0.4, c1=2.0, c2=2.0 | FO Médio=605880903008256.00000 | NSE Médio=0.60588
+
+    Tempo total de calibração dos parâmetros do PSO: 858.93s
+
+  [Fase 2] Benchmark Comparativo (1 rodada cada)...
+
+      Fase 2 [Legado]: Iteração [44/100] | FO: 1251795068.783 | NSE:    0.605
+
+    -> Escalar (Legado): Tempo = 1957.01s | FO Final = 1251795068.7830 | NSE Final = 0.6050
+
+      Fase 2 [Matricial]: Iteração [33/100] | FO: 605906203049984.000 | NSE:    0.606
+
+    -> Matricial CPU: Tempo = 78.38s | FO Final = 605906203049984.0000 | NSE Final = 0.6060
+
+      Fase 2 [Matricial]: Iteração [18/100] | FO: 605895264305152.000 | NSE:    0.606
+
+    -> Matricial GPU: Tempo = 225.63s | FO Final = 605895264305152.0000 | NSE Final = 0.6060
+
+      Fase 2 [GPU_JAX]: Iteração [28/100] | FO: 605894526107648.000 | NSE:    0.606
+
+    -> GPU_JAX: Tempo = 4.89s | FO Final = 605894526107648.0000 | NSE Final = 0.6060
+
+  [Fase 3] Validando série e calculando métricas...
+
+  [Fase 3] Resumo do bloco:
+
+    Calibração: NSE=0.6059 | NSE_Log=-0.2656 | NSE_Log_Legado=0.3813 | NSE_Sqrt=0.7151 | PBIAS=-0.00 | RMSE=55.54
+
+    Validação : NSE=0.6010 | NSE_Log=-0.4427 | NSE_Log_Legado=0.1958 | NSE_Sqrt=0.6372 | PBIAS=15.09 | RMSE=50.46
+
+
+
+▶ INICIANDO CALIBRATION_ID: 31
+
+  Bacia: ILHA GRANDE | Método: r | Calibração: 1448 dias
+
+  [Fase 1] Grid Search Rápido na GPU...
+
+    Repetições: 10 | Paralelismo: 20 | Iterações: 20 | Paciencia: 5
+
+      Grid GPU 01-10/10: Iteração 20/20 | Combinações: 15 | Melhor FO: 626703978201088.00000
+
+      Grid GPU 01-10/10: Iteração 20/20 | Combinações: 15 | Melhor FO: 630786076180480.00000
+
+    Melhor Combo (50P): w=0.7, c1=1.0, c2=2.0 | FO Médio=615074213396480.00000 | NSE Médio=0.61507
+
+    Melhor Combo (2000P): w=0.6, c1=1.7, c2=1.7 | FO Médio=627754433249280.00000 | NSE Médio=0.62775
+
+    Tempo total de calibração dos parâmetros do PSO: 815.60s
+
+  [Fase 2] Benchmark Comparativo (1 rodada cada)...
+
+      Fase 2 [Legado]: Iteração [20/100] | FO: 225035833642.573 | NSE:    0.298
+
+    -> Escalar (Legado): Tempo = 861.21s | FO Final = 225035833642.5730 | NSE Final = 0.2980
+
+      Fase 2 [Matricial]: Iteração [37/100] | FO: 630176459259904.000 | NSE:    0.630
+
+    -> Matricial CPU: Tempo = 85.40s | FO Final = 630176459259904.0000 | NSE Final = 0.6300
+
+      Fase 2 [Matricial]: Iteração [30/100] | FO: 626997109719040.000 | NSE:    0.627
+
+    -> Matricial GPU: Tempo = 361.35s | FO Final = 626997109719040.0000 | NSE Final = 0.6270
+
+      Fase 2 [GPU_JAX]: Iteração [57/100] | FO: 630697760915456.000 | NSE:    0.631
+
+    -> GPU_JAX: Tempo = 9.32s | FO Final = 630697760915456.0000 | NSE Final = 0.6310
+
+  [Fase 3] Validando série e calculando métricas...
+
+  [Fase 3] Resumo do bloco:
+
+    Calibração: NSE=0.6270 | NSE_Log=0.3356 | NSE_Log_Legado=0.2837 | NSE_Sqrt=0.6453 | PBIAS=-0.00 | RMSE=14.25
+
+    Validação : NSE=0.6200 | NSE_Log=0.3599 | NSE_Log_Legado=-0.0349 | NSE_Sqrt=0.5904 | PBIAS=17.25 | RMSE=23.39
+
+
+
+▶ INICIANDO CALIBRATION_ID: 33
+
+  Bacia: SERRA TALHADA | Método: r | Calibração: 901 dias
+
+  [Fase 1] Grid Search Rápido na GPU...
+
+    Repetições: 10 | Paralelismo: 20 | Iterações: 20 | Paciencia: 5
+
+      Grid GPU 01-10/10: Iteração 20/20 | Combinações: 15 | Melhor FO: 578914883731456.00000
+
+      Grid GPU 01-10/10: Iteração 20/20 | Combinações: 15 | Melhor FO: 578915890364416.00000
+
+    Melhor Combo (50P): w=0.4, c1=2.0, c2=2.0 | FO Médio=569746403622912.00000 | NSE Médio=0.56975
+
+    Melhor Combo (2000P): w=0.5, c1=1.5, c2=1.5 | FO Médio=578915420602368.00000 | NSE Médio=0.57892
+
+    Tempo total de calibração dos parâmetros do PSO: 851.68s
+
+  [Fase 2] Benchmark Comparativo (1 rodada cada)...
+
+      Fase 2 [Legado]: Iteração [38/100] | FO: 4914496897063.886 | NSE:    0.572
+
+    -> Escalar (Legado): Tempo = 1704.44s | FO Final = 4914496897063.8857 | NSE Final = 0.5720
+
+      Fase 2 [Matricial]: Iteração [47/100] | FO: 578915957473280.000 | NSE:    0.579
+
+    -> Matricial CPU: Tempo = 106.90s | FO Final = 578915957473280.0000 | NSE Final = 0.5790
+
+      Fase 2 [Matricial]: Iteração [29/100] | FO: 578915823255552.000 | NSE:    0.579
+
+    -> Matricial GPU: Tempo = 391.39s | FO Final = 578915823255552.0000 | NSE Final = 0.5790
+
+      Fase 2 [GPU_JAX]: Iteração [65/100] | FO: 578916293017600.000 | NSE:    0.579
+
+    -> GPU_JAX: Tempo = 11.54s | FO Final = 578916293017600.0000 | NSE Final = 0.5790
+
+  [Fase 3] Validando série e calculando métricas...
+
+  [Fase 3] Resumo do bloco:
+
+    Calibração: NSE=0.5789 | NSE_Log=-0.4088 | NSE_Log_Legado=0.2647 | NSE_Sqrt=0.6895 | PBIAS=0.00 | RMSE=57.41
+
+    Validação : NSE=0.5684 | NSE_Log=-0.3927 | NSE_Log_Legado=0.1175 | NSE_Sqrt=0.5840 | PBIAS=13.70 | RMSE=62.08
+
+
+
+========================================================================================================================
+
+ TABELA DE DADOS FINAIS - ESTATÍSTICAS DA PROFESSORA
+
+========================================================================================================================
+
+ ID         Bacia Metodo     Ks     Kl   Expo  NSE_Cal  NSE_Log_Cal  NSE_Log_Legado_Cal  NSE_Sqrt_Cal  PBIAS_Cal  RMSE_Cal  NSE_Val  NSE_Log_Val  NSE_Log_Legado_Val  NSE_Sqrt_Val  PBIAS_Val  RMSE_Val
+
+ 25      AFOGADOS normal 0.0373 0.7287 0.9463   0.4985      -0.3799             -0.1989        0.3407       -0.0 31.280001   0.2498      -0.2275              0.3999        0.1756     -36.91 42.040001
+
+ 27        FLORES      r 0.0420 0.5902 0.9365   0.6565      -0.4141              0.5007        0.7691       -0.0 37.820000   0.7836      -0.2085              0.7541        0.7794      -3.41 26.760000
+
+ 29      FLORESTA      r 0.0270 0.7228 0.9546   0.6059      -0.2656              0.3813        0.7151       -0.0 55.540001   0.6010      -0.4427              0.1958        0.6372      15.09 50.459999
+
+ 31   ILHA GRANDE      r 0.0000 0.6466 0.9430   0.6270       0.3356              0.2837        0.6453       -0.0 14.250000   0.6200       0.3599             -0.0349        0.5904      17.25 23.389999
+
+ 33 SERRA TALHADA      r 0.0560 0.4282 0.9619   0.5789      -0.4088              0.2647        0.6895        0.0 57.410000   0.5684      -0.3927              0.1175        0.5840      13.70 62.080002
+
+
+
+[SUCESSO] 3 CSVs gerados (Tempos, Convergência e Tabela Estatística)!
