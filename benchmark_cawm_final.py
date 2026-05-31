@@ -152,10 +152,53 @@ def simular_cawm_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 
     kl_array = xp.maximum((soma_C_masked - vol_obs_mm) / (soma_C_expo_masked + 1e-9), 0.0)
     nash_array, soma_qcalc_masked = executar_passagem(calcular_erro=True, kl_array=kl_array)
 
-    soma_abs = xp.abs(soma_qcalc_masked - xp.sum(Q_obs_masked)) + 1e-9
-    fo_array = (nash_array / soma_abs) * 1e6
+    fo_array = calcular_fo(xp, nash_array, soma_qcalc_masked, xp.sum(Q_obs_masked))
 
     return fo_array, nash_array
+
+
+def calcular_fo(xp, nash_array, soma_qcalc_masked, soma_qobs_masked, eps=1e-9, scale=1e6):
+    """Calcula o FO a partir do NSE (nash_array) e das somas de Q_calc e Q_obs.
+
+    FO = (NSE) / (|sum(Q_calc_masked) - sum(Q_obs_masked)| + eps) * scale
+    Usa operações do backend `xp` (numpy ou cupy).
+    """
+    soma_abs = xp.abs(soma_qcalc_masked - soma_qobs_masked) + eps
+    return (nash_array / soma_abs) * scale
+
+def calcular_fo_kge(xp, qcalc_masked, qobs_masked, eps=1e-9):
+    """
+    Calcula o Kling-Gupta Efficiency (KGE) adaptado para GPU.
+    qcalc_masked: Matriz 2D (particulas x dias) -> A vazão simulada
+    qobs_masked: Array 1D (dias) -> A vazão real observada
+    """
+    # 1. Média e Desvio Padrão Observado
+    media_obs = xp.mean(qobs_masked)
+    std_obs = xp.std(qobs_masked) + eps
+
+    # 2. Média e Desvio Padrão Simulado (calculado por linha/partícula)
+    media_sim = xp.mean(qcalc_masked, axis=1, keepdims=True)
+    std_sim = xp.std(qcalc_masked, axis=1) + eps
+
+    # 3. Correlação Linear de Pearson (r)
+    # Mostra se o modelo sobe e desce no momento certo
+    covariancia = xp.mean((qcalc_masked - media_sim) * (qobs_masked - media_obs), axis=1)
+    r = covariancia / (std_sim * std_obs)
+
+    # 4. Razão de Variabilidade (Alpha)
+    # Evita que o modelo subestime ou superestime os picos em geral
+    alpha = std_sim / std_obs
+
+    # 5. Razão de Viés (Beta)
+    # Garante o balanço do volume (que o seu Kl já faz, mas mantemos pela matemática)
+    beta = xp.mean(qcalc_masked, axis=1) / (media_obs + eps)
+
+    # 6. Cálculo Final do KGE
+    # Calcula a distância euclidiana para o ponto perfeito (r=1, alpha=1, beta=1)
+    kge = 1.0 - xp.sqrt((r - 1.0)**2 + (alpha - 1.0)**2 + (beta - 1.0)**2)
+
+    # O PSO tentará aproximar este valor de 1.0
+    return kge
 
 # ==============================================================================
 # 3. MOTOR FORWARD (Gera a série contínua para as Estatísticas da Professora)
