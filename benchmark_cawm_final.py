@@ -104,6 +104,7 @@ def simular_cawm_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 
         soma_C_masked = xp.zeros(particulas, dtype=xp.float32)
         soma_C_expo_masked = xp.zeros(particulas, dtype=xp.float32)
         numerador_nash = xp.zeros(particulas, dtype=xp.float32)
+        soma_qcalc_masked = xp.zeros(particulas, dtype=xp.float32)
 
         idx_mask = 0
         for d in range(dias):
@@ -136,21 +137,25 @@ def simular_cawm_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 
                 soma_C_expo_masked = soma_C_expo_masked + C_expo
                 if calcular_erro:
                     Q_calc_d = (C - xp.minimum(kl_array * C_expo, C)) * F_conversao
+                    soma_qcalc_masked = soma_qcalc_masked + Q_calc_d
                     erro_d = Q_obs_masked[idx_mask] - Q_calc_d
                     numerador_nash = numerador_nash + (erro_d ** 2)
                     idx_mask += 1
 
         if calcular_erro:
             denominador_nash = xp.sum((Q_obs_masked - xp.mean(Q_obs_masked))**2) + 1e-9
-            return 1.0 - (numerador_nash / denominador_nash)
+            return 1.0 - (numerador_nash / denominador_nash), soma_qcalc_masked
 
         return soma_C_masked, soma_C_expo_masked
 
     soma_C_masked, soma_C_expo_masked = executar_passagem(calcular_erro=False)
     kl_array = xp.maximum((soma_C_masked - vol_obs_mm) / (soma_C_expo_masked + 1e-9), 0.0)
-    nash_array = executar_passagem(calcular_erro=True, kl_array=kl_array)
+    nash_array, soma_qcalc_masked = executar_passagem(calcular_erro=True, kl_array=kl_array)
 
-    return nash_array
+    soma_abs = xp.abs(soma_qcalc_masked - xp.sum(Q_obs_masked)) + 1e-9
+    fo_array = (nash_array / soma_abs) * 1e6
+
+    return fo_array
 
 # ==============================================================================
 # 3. MOTOR FORWARD (Gera a série contínua para as Estatísticas da Professora)
@@ -241,7 +246,7 @@ def pso_escalar_legado(P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
         
         it_sem_melhora = 0 if houve_melhora else it_sem_melhora + 1
         historico.append(Gbest_nash)
-        print(f"      Fase 2 [Legado]: Iteração [{it+1:02d}/{iteracoes}] | NSE: {Gbest_nash:8.3f}", end="\r")
+        print(f"      Fase 2 [Legado]: Iteração [{it+1:02d}/{iteracoes}] | FO: {Gbest_nash:8.3f}", end="\r")
         if it_sem_melhora >= paciencia or it == iteracoes - 1:
             print()
             break
@@ -287,7 +292,7 @@ def pso_vetorizado(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, particula
             it_sem_melhora += 1
             
         historico.append(Gbest_nash)
-        print(f"      Fase 2 [Matricial]: Iteração [{it+1:02d}/{iteracoes}] | NSE: {Gbest_nash:8.3f}      ", end="\r")
+        print(f"      Fase 2 [Matricial]: Iteração [{it+1:02d}/{iteracoes}] | FO: {Gbest_nash:8.3f}      ", end="\r")
         if it_sem_melhora >= paciencia or it == iteracoes - 1:
             print()
             break
@@ -343,7 +348,7 @@ def pso_mega_tensor_grid_50(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param, 
                 it_sem_melhora[s] += 1
                 
         melhor_global = float(xp.max(Gbest_nash))
-        print(f"      Grid GPU (50P): Iteração {it+1:02d}/{iteracoes} | Combinações: {Nc:02d} | Melhor NSE: {melhor_global:8.5f}", end="\r")
+        print(f"      Grid GPU (50P): Iteração {it+1:02d}/{iteracoes} | Combinações: {Nc:02d} | Melhor FO: {melhor_global:8.5f}", end="\r")
         if np.all(it_sem_melhora >= paciencia) or it == iteracoes - 1:
             print()
             break
@@ -399,7 +404,7 @@ def pso_mega_tensor_grid_2000(xp, P, E, Q_obs, mask_calib, area, SUBmax, a_param
                 it_sem_melhora[s] += 1
 
         melhor_global = float(xp.max(Gbest_nash))
-        print(f"      Grid GPU (2000P): Iteração {it+1:02d}/{iteracoes} | Combinações: {Nc:02d} | Melhor NSE: {melhor_global:8.5f}", end="\r")
+        print(f"      Grid GPU (2000P): Iteração {it+1:02d}/{iteracoes} | Combinações: {Nc:02d} | Melhor FO: {melhor_global:8.5f}", end="\r")
         if np.all(it_sem_melhora >= paciencia) or it == iteracoes - 1:
             print()
             break
@@ -512,7 +517,7 @@ def executar_benchmark_pajeu():
                 t_fim = time.perf_counter()
 
                 tempo_exec = t_fim - t_inicio
-                print(f"    -> {nome_metodo}: Tempo = {tempo_exec:.2f}s | NSE Final = {nash_final:.4f}")
+                print(f"    -> {nome_metodo}: Tempo = {tempo_exec:.2f}s | FO Final = {nash_final:.4f}")
 
                 # Guardamos o Ks e Expo da GPU para o cálculo final das estatísticas
                 if nome_metodo == "Matricial GPU":
@@ -520,7 +525,7 @@ def executar_benchmark_pajeu():
 
                 tabela_benchmark.append({
                     "ID": calib_id, "Bacia": nome_bacia, "Método": nome_metodo, "Partículas": part,
-                    "Tempo(s)": round(tempo_exec, 2), "NSE": round(nash_final, 4), "Iter_Conv": iteracao_conv
+                    "Tempo(s)": round(tempo_exec, 2), "FO": round(nash_final, 4), "Iter_Conv": iteracao_conv
                 })
                 for it, n_val in enumerate(historico):
                     dados_convergencia.append({"ID": calib_id, "Método": nome_metodo, "Iteração": it+1, "NSE": n_val})
